@@ -72,7 +72,7 @@ SOFTWARE.
 #endif
 
 #ifndef ADMPATH
-#define ADMPATH "@TERMUX_PREFIX@/adm/X%smsgs"
+#define ADMPATH PROJECTROOT "/adm/X%smsgs"
 #endif
 
 #ifdef RLIMIT_DATA

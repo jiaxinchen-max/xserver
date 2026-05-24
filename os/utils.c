@@ -234,7 +234,7 @@ OsSignal(int sig, OsSigHandlerPtr handler)
  * server at a time.  This keeps the servers from stomping on each other
  * if the user forgets to give them different display numbers.
  */
-#define LOCK_DIR "@TERMUX_PREFIX@/tmp"
+#define LOCK_DIR PROJECTROOT "/tmp"
 #define LOCK_TMP_PREFIX "/.tX"
 #define LOCK_PREFIX "/.X"
 #define LOCK_SUFFIX "-lock"
@@ -1394,7 +1394,7 @@ System(const char *command)
         p = -1;
         break;
     case 0:                    /* child */
-        execl("@TERMUX_PREFIX@/bin/sh", "sh", "-c", command, (char *) NULL);
+        execl(PROJECTROOT "/bin/sh", "sh", "-c", command, (char *) NULL);
         _exit(127);
     default:                   /* parent */
         do {
@@ -1476,7 +1476,7 @@ Popen(const char *command, const char *type)
             }
             close(pdes[1]);
         }
-        execl("@TERMUX_PREFIX@/bin/sh", "sh", "-c", command, (char *) NULL);
+        execl(PROJECTROOT "/bin/sh", "sh", "-c", command, (char *) NULL);
         _exit(127);
     }
 
@@ -1656,7 +1656,7 @@ Win32TempDir(void)
     else if (getenv("TMP") != NULL)
         return getenv("TMP");
     else
-        return "@TERMUX_PREFIX@/tmp";
+        return PROJECTROOT "/tmp";
 }
 
 int

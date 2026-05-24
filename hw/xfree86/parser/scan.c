@@ -879,13 +879,13 @@ xf86initConfigFiles(void)
  */
 
 #ifndef DEFAULT_CONF_PATH
-#define DEFAULT_CONF_PATH	"@TERMUX_PREFIX@/etc/X11/%S," \
+#define DEFAULT_CONF_PATH	"%C/X11/%S," \
 							"%P/etc/X11/%S," \
-							"@TERMUX_PREFIX@/etc/X11/%G," \
+							"%C/X11/%G," \
 							"%P/etc/X11/%G," \
-							"@TERMUX_PREFIX@/etc/X11/%X-%M," \
-							"@TERMUX_PREFIX@/etc/X11/%X," \
-							"@TERMUX_PREFIX@/etc/%X," \
+							"%C/X11/%X-%M," \
+							"%C/X11/%X," \
+							"%C/%X," \
 							"%P/etc/X11/%X.%H," \
 							"%P/etc/X11/%X-%M," \
 							"%P/etc/X11/%X," \

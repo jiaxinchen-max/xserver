@@ -81,8 +81,8 @@ OutputDirectory(char *outdir, size_t size)
     if (directory)
         r = snprintf(outdir, size, "%s%s", directory, pathsep);
     if (r < 0 || r >= size) {
-        assert(strlen("@TERMUX_PREFIX@/tmp/") < size);
-        strcpy(outdir, "@TERMUX_PREFIX@/tmp/");
+        assert(strlen(PROJECTROOT "/tmp/") < size);
+        strcpy(outdir, PROJECTROOT "/tmp/");
     }
 }
 

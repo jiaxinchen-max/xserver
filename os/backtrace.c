@@ -255,7 +255,7 @@ xorg_backtrace_pstack(void)
         closefrom(STDERR_FILENO);
 
         snprintf(parent, sizeof(parent), "%d", getppid());
-        execle("@TERMUX_PREFIX@/bin/pstack", "pstack", parent, NULL);
+        execle(PROJECTROOT "/bin/pstack", "pstack", parent, NULL);
         exit(1);
     }
     else {

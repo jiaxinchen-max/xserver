@@ -106,7 +106,7 @@
 #define SYS_CONFIGDIRPATH	"%D/X11/%X"
 #endif
 #ifndef PROJECTROOT
-#define PROJECTROOT	"@TERMUX_PREFIX@/X11R6"
+#define PROJECTROOT	"/usr/X11R6"
 #endif
 
 static ModuleDefault ModuleDefaults[] = {

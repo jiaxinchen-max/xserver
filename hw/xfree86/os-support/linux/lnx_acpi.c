@@ -15,7 +15,7 @@
 #include <fcntl.h>
 #include <errno.h>
 
-#define ACPI_SOCKET  "@TERMUX_PREFIX@/var/run/acpid.socket"
+#define ACPI_SOCKET  PROJECTROOT "/var/run/acpid.socket"
 
 #define ACPI_VIDEO_NOTIFY_SWITCH	0x80
 #define ACPI_VIDEO_NOTIFY_PROBE		0x81
