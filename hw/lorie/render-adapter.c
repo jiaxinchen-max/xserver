@@ -35,7 +35,7 @@ lorieRenderConnect(int width, int height, int framerate)
 
     if (connectToRenderWithConfig(width, height, framerate,
                                   AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM,
-                                  LORIEBUFFER_FD) != 0) {
+                                  LORIEBUFFER_AHARDWAREBUFFER) != 0) {
         lorieLog("connectToRender failed: %s\n", strerror(errno));
         return false;
     }
@@ -48,8 +48,10 @@ lorieRenderConnect(int width, int height, int framerate)
 
     desc = LorieBuffer_description(get_lorieBuffer());
     get_serverState()->rootWindowTextureID = desc->id;
-    lorieLog("connected termux-render buffer %dx%d stride=%d id=%llu\n",
-             desc->width, desc->height, desc->stride,
+    lorieLog("connected termux-render buffer %dx%d stride=%d "
+             "format=%d type=%d id=%llu\n",
+             desc->width, desc->height, desc->stride, desc->format,
+             desc->type,
              (unsigned long long) desc->id);
 
     connected = true;
