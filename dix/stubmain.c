@@ -23,6 +23,7 @@ DEALINGS IN THE SOFTWARE.
 
 ******************************************************************/
 
+extern const char *xf86LogFile;
 int dix_main(int argc, char *argv[], char *envp[]);
 
 /*
@@ -31,5 +32,9 @@ int dix_main(int argc, char *argv[], char *envp[]);
 int
 main(int argc, char *argv[], char *envp[])
 {
+#ifdef ANDROID
+	xf86LogFile = "/dev/null";
+#endif
+
     return dix_main(argc, argv, envp);
 }

@@ -518,7 +518,7 @@ xf86WriteMmio32Le(__volatile__ void *base, const unsigned long offset,
     barrier();
 }
 
-#elif defined(__arm32__) && !defined(__linux__)
+#elif defined(__arm32__) && (!defined(__linux__) || defined(__ANDROID__))
 #define PORT_SIZE long
 
 extern _X_EXPORT unsigned int IOPortBase;      /* Memory mapped I/O port area */

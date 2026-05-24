@@ -132,7 +132,11 @@
 #if !defined(__sun)
 #include <sys/at_ansi.h>
 #endif
+#ifdef __ANDROID__
+#include <linux/kd.h>
+#else
 #include <sys/kd.h>
+#endif
 #include <sys/vt.h>
 
 extern _X_HIDDEN void xf86VTAcquire(int);
@@ -195,7 +199,11 @@ extern _X_HIDDEN char xf86SolarisFbDev[PATH_MAX];
 #include <sys/mman.h>
 #ifdef __linux__
 #define HAS_USL_VTS
+#ifdef __ANDROID__
+#include <linux/kd.h>
+#else
 #include <sys/kd.h>
+#endif
 #include <sys/vt.h>
 #define LDGMAP GIO_SCRNMAP
 #define LDSMAP PIO_SCRNMAP

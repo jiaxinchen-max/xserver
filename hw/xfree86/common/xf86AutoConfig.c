@@ -294,7 +294,7 @@ listPossibleVideoDrivers(XF86MatchedDrivers *md)
     xf86PciMatchDriver(md);
 #endif
 
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
     xf86AddMatchedDriver(md, "modesetting");
 #endif
 

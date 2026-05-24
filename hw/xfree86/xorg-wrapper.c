@@ -251,23 +251,6 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    /* If we've found cards, and all cards support kms, drop root rights */
-    if (needs_root_rights == 0 || (total_cards && kms_cards == total_cards)) {
-        gid_t realgid = getgid();
-        uid_t realuid = getuid();
-
-        if (setresgid(-1, realgid, realgid) != 0) {
-            fprintf(stderr, "%s: Could not drop setgid privileges: %s\n",
-                progname, strerror(errno));
-            exit(1);
-        }
-        if (setresuid(-1, realuid, realuid) != 0) {
-            fprintf(stderr, "%s: Could not drop setuid privileges: %s\n",
-                progname, strerror(errno));
-            exit(1);
-        }
-    }
-
     snprintf(buf, sizeof(buf), "%s/Xorg", SUID_WRAPPER_DIR);
 
     /* Check if the server is executable by our real uid */

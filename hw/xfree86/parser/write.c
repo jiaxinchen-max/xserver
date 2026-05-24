@@ -129,7 +129,7 @@ doWriteConfigFile(const char *filename, XF86ConfigPtr cptr)
 int
 xf86writeConfigFile(const char *filename, XF86ConfigPtr cptr)
 {
-#ifndef HAS_NO_UIDS
+#if !defined(HAS_NO_UIDS) && !defined(__ANDROID__)
     int ret;
 
     if (getuid() != geteuid()) {

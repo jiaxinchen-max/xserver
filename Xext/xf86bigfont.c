@@ -715,16 +715,7 @@ XFree86BigfontExtensionInit(void)
         /* fprintf(stderr, "signature = 0x%08X\n", signature); */
 
         FontShmdescIndex = xfont2_allocate_font_private_index();
-
-#if !defined(CSRG_BASED) && !defined(__CYGWIN__)
-        pagesize = SHMLBA;
-#else
-#ifdef _SC_PAGESIZE
         pagesize = sysconf(_SC_PAGESIZE);
-#else
-        pagesize = getpagesize();
-#endif
-#endif
 #endif
     }
 }
