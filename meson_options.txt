@@ -8,6 +8,8 @@ option('xnest', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto'
        description: 'Enable Xnest nested X server')
 option('xvfb', type: 'boolean', value: true,
        description: 'Enable Xvfb X server')
+option('lorie', type: 'boolean', value: false,
+       description: 'Enable Xlorie Termux render X server')
 option('xwin', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto',
        description: 'Enable XWin X server')
 option('xquartz', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto',

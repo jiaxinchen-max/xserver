@@ -1,0 +1,91 @@
+#!/data/data/com.termux/files/usr/bin/sh
+
+set -u
+
+DISPLAY_NAME="${XLORIE_DISPLAY:-:1}"
+SCREEN_SIZE="${XLORIE_SCREEN:-1280x720x24}"
+FRAMERATE="${XLORIE_FRAMERATE:-60}"
+RENDER_SOCKET="${XLORIE_RENDER_SOCKET:-/data/data/com.termux/files/home/tmp/termux-render}"
+XLORIE_BIN="${XLORIE_BIN:-Xlorie}"
+WAIT_RENDER="${XLORIE_WAIT_RENDER:-30}"
+WAIT_X="${XLORIE_WAIT_X:-20}"
+LOG_DIR="${XLORIE_LOG_DIR:-${TMPDIR:-/tmp}}"
+
+display_number="${DISPLAY_NAME#:}"
+display_number="${display_number%%.*}"
+LOG_FILE="${XLORIE_LOG_FILE:-$LOG_DIR/xlorie-$display_number.log}"
+
+die() {
+    echo "xlorie-startxfce4: $*" >&2
+    exit 1
+}
+
+command -v "$XLORIE_BIN" >/dev/null 2>&1 || die "$XLORIE_BIN not found"
+mkdir -p "$LOG_DIR" || die "failed to create log dir: $LOG_DIR"
+
+i=0
+while [ ! -S "$RENDER_SOCKET" ] && [ "$i" -lt "$WAIT_RENDER" ]; do
+    echo "waiting for termux-render socket: $RENDER_SOCKET ($i/$WAIT_RENDER)"
+    sleep 1
+    i=$((i + 1))
+done
+
+if [ ! -S "$RENDER_SOCKET" ]; then
+    echo "termux-render socket not found, starting Xlorie anyway: $RENDER_SOCKET" >&2
+fi
+
+"$XLORIE_BIN" "$DISPLAY_NAME" \
+    -screen 0 "$SCREEN_SIZE" \
+    -framerate "$FRAMERATE" \
+    -render-socket "$RENDER_SOCKET" \
+    >"$LOG_FILE" 2>&1 &
+xlorie_pid=$!
+
+cleanup() {
+    if kill -0 "$xlorie_pid" >/dev/null 2>&1; then
+        kill "$xlorie_pid" >/dev/null 2>&1
+        wait "$xlorie_pid" >/dev/null 2>&1
+    fi
+}
+trap cleanup EXIT INT TERM
+
+if command -v xdpyinfo >/dev/null 2>&1; then
+    i=0
+    while ! DISPLAY="$DISPLAY_NAME" xdpyinfo >/dev/null 2>&1 &&
+          [ "$i" -lt "$WAIT_X" ]; do
+        if ! kill -0 "$xlorie_pid" >/dev/null 2>&1; then
+            tail -n 80 "$LOG_FILE" >&2
+            die "Xlorie exited early"
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    DISPLAY="$DISPLAY_NAME" xdpyinfo >/dev/null 2>&1 ||
+        die "Xlorie did not become ready, log: $LOG_FILE"
+else
+    sleep 2
+fi
+
+export DISPLAY="$DISPLAY_NAME"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}/runtime-${USER:-$(id -u)}}"
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR" >/dev/null 2>&1
+
+if [ -n "${XLORIE_SESSION:-}" ]; then
+    sh -lc "$XLORIE_SESSION"
+    exit $?
+fi
+
+if command -v xfce4-session >/dev/null 2>&1; then
+    session_cmd=xfce4-session
+elif command -v startxfce4 >/dev/null 2>&1; then
+    session_cmd=startxfce4
+else
+    die "xfce4-session/startxfce4 not found"
+fi
+
+if command -v dbus-run-session >/dev/null 2>&1; then
+    dbus-run-session -- "$session_cmd"
+else
+    "$session_cmd"
+fi

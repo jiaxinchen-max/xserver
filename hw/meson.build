@@ -6,6 +6,10 @@ if get_option('xvfb')
     subdir('vfb')
 endif
 
+if get_option('lorie')
+    subdir('lorie')
+endif
+
 if build_xnest
     subdir('xnest')
 endif
