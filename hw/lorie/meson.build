@@ -12,13 +12,11 @@ lorie_srcs = [
     '../../mi/miinitext.h',
 ]
 
-android_dep = cc.find_library('android', required: true)
-
 xlorie_server = executable(
     'Xlorie',
     lorie_srcs,
     include_directories: [inc, include_directories('.')],
-    dependencies: common_dep + [android_dep],
+    dependencies: common_dep,
     link_with: [
         libxserver_main,
         libxserver_fb,

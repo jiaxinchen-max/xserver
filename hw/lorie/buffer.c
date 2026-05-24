@@ -2,10 +2,8 @@
 #include <dix-config.h>
 #endif
 
-#include <EGL/egl.h>
-#include <GLES2/gl2.h>
-#include <android/hardware_buffer.h>
 #include <errno.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -24,8 +22,8 @@ struct LorieBuffer {
     int fd;
     size_t size;
     off_t offset;
-    GLuint id;
-    EGLImage image;
+    uint32_t id;
+    void *image;
     struct xorg_list link;
 };
 
@@ -79,12 +77,6 @@ LorieBuffer_lock(LorieBuffer *buffer, void **out)
         buffer->desc.type == LORIEBUFFER_FD) {
         buffer->lockedData = buffer->desc.data;
     }
-    else if (buffer->desc.type == LORIEBUFFER_AHARDWAREBUFFER) {
-        ret = AHardwareBuffer_lock(buffer->desc.buffer,
-                                   AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN |
-                                   AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
-                                   -1, NULL, &buffer->lockedData);
-    }
     else {
         return EINVAL;
     }
@@ -109,9 +101,6 @@ LorieBuffer_unlock(LorieBuffer *buffer)
     if (!buffer->locked)
         return 0;
 
-    if (buffer->desc.type == LORIEBUFFER_AHARDWAREBUFFER)
-        ret = AHardwareBuffer_unlock(buffer->desc.buffer, NULL);
-
     buffer->lockedData = NULL;
     buffer->locked = 0;
     return ret;
@@ -130,9 +119,6 @@ LorieBuffer_release(LorieBuffer *buffer)
 
     if (buffer->fd >= 0)
         close(buffer->fd);
-
-    if (buffer->desc.type == LORIEBUFFER_AHARDWAREBUFFER && buffer->desc.buffer)
-        AHardwareBuffer_release(buffer->desc.buffer);
 
     free(buffer);
 }
@@ -205,12 +191,9 @@ LorieBuffer_recvHandleFromUnixSocket(int socketFd, LorieBuffer **outBuffer)
             return;
         }
     }
-    else if (wire.desc.type == LORIEBUFFER_AHARDWAREBUFFER) {
-        AHardwareBuffer_recvHandleFromUnixSocket(socketFd, &wire.desc.buffer);
-        if (!wire.desc.buffer)
-            return;
-    }
     else {
+        lorieLog("unsupported LorieBuffer type %u; Xlorie currently expects fd buffers\n",
+                 wire.desc.type);
         errno = EPROTO;
         return;
     }
@@ -221,8 +204,6 @@ LorieBuffer_recvHandleFromUnixSocket(int socketFd, LorieBuffer **outBuffer)
             munmap(wire.desc.data, wire.size);
         if (wire.fd >= 0)
             close(wire.fd);
-        if (wire.desc.type == LORIEBUFFER_AHARDWAREBUFFER && wire.desc.buffer)
-            AHardwareBuffer_release(wire.desc.buffer);
         return;
     }
 

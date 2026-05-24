@@ -1,16 +1,18 @@
 #ifndef LORIE_H
 #define LORIE_H
 
-#include <android/hardware_buffer.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <pthread.h>
 
+#define AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM 2
 #ifndef AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM
 #define AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM 5
 #endif
+
+typedef struct AHardwareBuffer AHardwareBuffer;
 
 #define LORIE_RENDER_MAGIC "0xDEADBEEF"
 #define LORIE_RENDER_DEFAULT_SOCKET \
