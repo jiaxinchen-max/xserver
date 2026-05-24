@@ -579,6 +579,7 @@ AC_ARG_ENABLE(suid-wrapper, AS_HELP_STRING([--enable-suid-wrapper], [Build suid-
 dnl DDXes.
 AC_ARG_ENABLE(xorg,    	      AS_HELP_STRING([--enable-xorg], [Build Xorg server (default: auto)]), [XORG=$enableval], [XORG=auto])
 AC_ARG_ENABLE(xvfb,    	      AS_HELP_STRING([--enable-xvfb], [Build Xvfb server (default: yes)]), [XVFB=$enableval], [XVFB=yes])
+AC_ARG_ENABLE(lorie,    	      AS_HELP_STRING([--enable-lorie], [Build Xlorie Termux render server (default: auto)]), [LORIE=$enableval], [LORIE=auto])
 AC_ARG_ENABLE(xnest,   	      AS_HELP_STRING([--enable-xnest], [Build Xnest server (default: auto)]), [XNEST=$enableval], [XNEST=auto])
 AC_ARG_ENABLE(xquartz,        AS_HELP_STRING([--enable-xquartz], [Build Xquartz server for OS-X (default: auto)]), [XQUARTZ=$enableval], [XQUARTZ=auto])
 AC_ARG_ENABLE(standalone-xpbproxy, AS_HELP_STRING([--enable-standalone-xpbproxy], [Build a standalone xpbproxy (in addition to the one integrated into Xquartz as a separate thread) (default: no)]), [STANDALONE_XPBPROXY=$enableval], [STANDALONE_XPBPROXY=no])
@@ -1728,6 +1729,26 @@ if test "x$XVFB" = xyes; then
 	AC_SUBST([XVFB_SYS_LIBS])
 fi
 
+dnl Xlorie DDX
+
+if test "x$LORIE" = xauto; then
+	case $host_os in
+		*android*)	LORIE=yes ;;
+		*)		LORIE=no ;;
+	esac
+fi
+
+AC_MSG_CHECKING([whether to build Xlorie DDX])
+AC_MSG_RESULT([$LORIE])
+AM_CONDITIONAL(XLORIE, [test "x$LORIE" = xyes])
+
+if test "x$LORIE" = xyes; then
+	XLORIE_LIBS="$FB_LIB $FIXES_LIB $XEXT_LIB $DBE_LIB $RECORD_LIB $GLX_LIBS $RANDR_LIB $RENDER_LIB $DAMAGE_LIB $DRI3_LIB $PRESENT_LIB $MIEXT_SYNC_LIB $MIEXT_DAMAGE_LIB $MIEXT_SHADOW_LIB $XI_LIB $XKB_LIB $XKB_STUB_LIB $COMPOSITE_LIB"
+	XLORIE_SYS_LIBS="$GLX_SYS_LIBS"
+	AC_SUBST([XLORIE_LIBS])
+	AC_SUBST([XLORIE_SYS_LIBS])
+fi
+
 
 dnl Xnest DDX
 
@@ -2349,6 +2370,7 @@ hw/xfree86/xkb/Makefile
 hw/xfree86/utils/Makefile
 hw/xfree86/utils/man/Makefile
 hw/xfree86/utils/gtf/Makefile
+hw/lorie/Makefile
 hw/vfb/Makefile
 hw/vfb/man/Makefile
 hw/xnest/Makefile

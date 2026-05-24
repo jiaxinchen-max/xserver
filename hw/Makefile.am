@@ -6,6 +6,10 @@ if XVFB
 XVFB_SUBDIRS = vfb
 endif
 
+if XLORIE
+XLORIE_SUBDIRS = lorie
+endif
+
 if XNEST
 XNEST_SUBDIRS = xnest
 endif
@@ -26,11 +30,12 @@ SUBDIRS =			\
 	$(XORG_SUBDIRS)		\
 	$(XWIN_SUBDIRS)		\
 	$(XVFB_SUBDIRS)		\
+	$(XLORIE_SUBDIRS)	\
 	$(XNEST_SUBDIRS)	\
 	$(KDRIVE_SUBDIRS)	\
 	$(XQUARTZ_SUBDIRS)
 
-DIST_SUBDIRS = xfree86 vfb xnest xwin xquartz kdrive
+DIST_SUBDIRS = xfree86 vfb lorie xnest xwin xquartz kdrive
 
 relink:
 	$(AM_V_at)for i in $(SUBDIRS) ; do $(MAKE) -C $$i relink || exit 1 ; done
