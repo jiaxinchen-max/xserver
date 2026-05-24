@@ -10,6 +10,20 @@
 
 #define TERMUX_RENDER_SOCKET_PATH "/data/data/com.termux/files/home/tmp/termux-render"
 
+#ifndef XLORIE_RENDER_BUFFER_FORMAT
+#define XLORIE_RENDER_BUFFER_FORMAT AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM
+#endif
+
+#ifndef XLORIE_RENDER_BUFFER_TYPE
+#if defined(XLORIE_RENDER_USE_FD_ONLY) && XLORIE_RENDER_USE_FD_ONLY
+#define XLORIE_RENDER_BUFFER_TYPE LORIEBUFFER_FD
+#elif defined(XLORIE_RENDER_USE_AHARDWAREBUFFER) && !XLORIE_RENDER_USE_AHARDWAREBUFFER
+#define XLORIE_RENDER_BUFFER_TYPE LORIEBUFFER_FD
+#else
+#define XLORIE_RENDER_BUFFER_TYPE LORIEBUFFER_AHARDWAREBUFFER
+#endif
+#endif
+
 static const char *requestedSocketPath;
 static bool connected;
 
@@ -33,9 +47,9 @@ lorieRenderConnect(int width, int height, int framerate)
                  TERMUX_RENDER_SOCKET_PATH, requestedSocketPath);
     }
 
-    if (connectToRenderWithConfig(width, height, framerate,
-                                  AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM,
-                                  LORIEBUFFER_AHARDWAREBUFFER) != 0) {
+    setScreenConfig(width, height, framerate, XLORIE_RENDER_BUFFER_FORMAT,
+                    XLORIE_RENDER_BUFFER_TYPE);
+    if (connectToRender() != 0) {
         lorieLog("connectToRender failed: %s\n", strerror(errno));
         return false;
     }

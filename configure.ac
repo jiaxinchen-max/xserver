@@ -1746,7 +1746,7 @@ if test "x$LORIE" = xyes; then
 	AC_CHECK_HEADER([termux/render/render.h], [],
 		[AC_MSG_ERROR([Xlorie requires termux-render headers])])
 	lorie_save_LIBS="$LIBS"
-	AC_CHECK_LIB([termux-render], [connectToRenderWithConfig],
+	AC_CHECK_LIB([termux-render], [connectToRender],
 		[XLORIE_RENDER_LIBS="-ltermux-render"],
 		[AC_MSG_ERROR([Xlorie requires libtermux-render])])
 	LIBS="$lorie_save_LIBS"
