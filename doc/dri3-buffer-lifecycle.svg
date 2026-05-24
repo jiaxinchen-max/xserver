@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="700" viewBox="0 0 1240 700">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#24343d"/>
+    </marker>
+    <style>
+      text { font-family: Arial, "PingFang SC", sans-serif; fill: #142229; }
+      .title { font-size: 28px; font-weight: 700; }
+      .state-title { font-size: 17px; font-weight: 700; }
+      .body { font-size: 14px; }
+      .small { font-size: 12.5px; fill: #465860; }
+      .state { fill: #f8fbfc; stroke: #7f97a2; stroke-width: 2; rx: 8; }
+      .active { fill: #effcf2; stroke: #57a565; }
+      .wait { fill: #fff7e9; stroke: #cb8a2e; }
+      .dead { fill: #f4f4f4; stroke: #999999; }
+      .line { stroke: #24343d; stroke-width: 2.1; fill: none; marker-end: url(#arrow); }
+      .dash { stroke-dasharray: 7 6; }
+    </style>
+  </defs>
+
+  <rect width="1240" height="700" fill="#ffffff"/>
+  <text x="40" y="48" class="title">DRI3 buffer lifecycle in Xlorie</text>
+
+  <rect x="55" y="110" width="190" height="110" class="state"/>
+  <text x="78" y="142" class="state-title">1. Client fd</text>
+  <text x="78" y="172" class="body">request carries fd</text>
+  <text x="78" y="194" class="small">stride/offset/modifier</text>
+
+  <rect x="305" y="110" width="210" height="110" class="state"/>
+  <text x="328" y="142" class="state-title">2. LorieBuffer</text>
+  <text x="328" y="172" class="body">wrapFileDescriptor</text>
+  <text x="328" y="194" class="small">duplicates fd internally</text>
+
+  <rect x="575" y="110" width="220" height="110" class="state active"/>
+  <text x="598" y="142" class="state-title">3. Pixmap private</text>
+  <text x="598" y="172" class="body">buffer + locked ptr</text>
+  <text x="598" y="194" class="small">registered = false</text>
+
+  <rect x="855" y="110" width="220" height="110" class="state wait"/>
+  <text x="878" y="142" class="state-title">4. Present flip</text>
+  <text x="878" y="172" class="body">register buffer</text>
+  <text x="878" y="194" class="small">registered = true</text>
+
+  <rect x="855" y="315" width="220" height="110" class="state active"/>
+  <text x="878" y="347" class="state-title">5. Renderer active</text>
+  <text x="878" y="377" class="body">GL texture attached</text>
+  <text x="878" y="399" class="small">rootWindowTextureID = id</text>
+
+  <rect x="575" y="315" width="220" height="110" class="state wait"/>
+  <text x="598" y="347" class="state-title">6. Unflip</text>
+  <text x="598" y="377" class="body">root buffer selected</text>
+  <text x="598" y="399" class="small">pixmap still alive</text>
+
+  <rect x="305" y="315" width="210" height="110" class="state dead"/>
+  <text x="328" y="347" class="state-title">7. DestroyPixmap</text>
+  <text x="328" y="377" class="body">unregister if needed</text>
+  <text x="328" y="399" class="small">unlock + release</text>
+
+  <rect x="55" y="315" width="190" height="110" class="state dead"/>
+  <text x="78" y="347" class="state-title">8. Freed</text>
+  <text x="78" y="377" class="body">fd/GL resource gone</text>
+  <text x="78" y="399" class="small">renderer releases on GL thread</text>
+
+  <path class="line" d="M245 165 H305"/>
+  <path class="line" d="M515 165 H575"/>
+  <path class="line" d="M795 165 H855"/>
+  <path class="line" d="M965 220 V315"/>
+  <path class="line" d="M855 370 H795"/>
+  <path class="line dash" d="M685 315 V220"/>
+  <text x="705" y="272" class="small">next flip can reuse registration</text>
+  <path class="line" d="M575 370 H515"/>
+  <path class="line" d="M305 370 H245"/>
+
+  <rect x="180" y="520" width="880" height="95" class="state"/>
+  <text x="205" y="552" class="state-title">Ownership rule</text>
+  <text x="205" y="582" class="body">DRI3 request closes the original client fd after import; Xlorie must keep its own duplicated handle through LorieBuffer.</text>
+  <text x="205" y="605" class="small">Renderer-side GL-attached buffers are released on renderer thread, not directly from the socket processing thread.</text>
+</svg>

@@ -7,6 +7,7 @@ AM_CFLAGS = -DHAVE_DIX_CONFIG_H \
 
 SRCS =	InitInput.c \
 	InitOutput.c \
+	clipboard.c \
 	render-adapter.c \
 	log.c \
 	log.h \

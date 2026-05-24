@@ -10,24 +10,39 @@
 #endif
 
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include <X11/X.h>
 #include <X11/Xos.h>
 #include <X11/Xproto.h>
 
 #include "colormapst.h"
+#include "cursor.h"
+#include "cursorstr.h"
 #include "dix.h"
+#ifdef DRI3
+#include "dri3.h"
+#include "drm_fourcc.h"
+#endif
 #include "fb.h"
 #include "gcstruct.h"
 #include "glx_extinit.h"
 #include "input.h"
+#include "list.h"
 #include "micmap.h"
 #include "miline.h"
 #include "mipointer.h"
 #include "os.h"
+#ifdef PRESENT
+#include "present.h"
+#endif
+#include "pixmapstr.h"
+#include "privates.h"
 #include "randrstr.h"
 #include "scrnintstr.h"
 #include "servermd.h"
@@ -43,6 +58,10 @@
 #define LORIE_DEFAULT_BLACKPIXEL 0
 #define LORIE_DEFAULT_WHITEPIXEL 1
 
+#if defined(DRI3) && !defined(DRM_FORMAT_MOD_LINEAR)
+#define DRM_FORMAT_MOD_LINEAR 0
+#endif
+
 typedef struct {
     int width;
     int height;
@@ -56,7 +75,33 @@ typedef struct {
     Pixel whitePixel;
     unsigned int lineBias;
     CloseScreenProcPtr closeScreen;
+#ifdef DRI3
+    DestroyPixmapProcPtr destroyPixmap;
+#endif
+#ifdef PRESENT
+    uint64_t vblankInterval;
+    uint64_t currentMsc;
+    struct xorg_list vblankQueue;
+#endif
 } lorieScreenInfo;
+
+#ifdef PRESENT
+typedef struct {
+    struct xorg_list link;
+    uint64_t id;
+    uint64_t msc;
+} lorieVblankRec;
+#endif
+
+#ifdef DRI3
+typedef struct {
+    LorieBuffer *buffer;
+    void *locked;
+    Bool registered;
+} loriePixmapPriv;
+
+static DevPrivateKeyRec loriePixmapPrivateKey;
+#endif
 
 static lorieScreenInfo lorieScreen = {
     .width = LORIE_DEFAULT_WIDTH,
@@ -71,6 +116,13 @@ static lorieScreenInfo lorieScreen = {
 static Bool loriePixmapDepths[33];
 static Bool Render = TRUE;
 static Bool blockHandlersRegistered = FALSE;
+#ifdef DRI3
+static Bool Dri3 = TRUE;
+#endif
+
+#ifdef PRESENT
+static void loriePerformVblanks(void);
+#endif
 
 static void
 lorieInitializePixmapDepths(void)
@@ -142,6 +194,9 @@ ddxUseMsg(void)
     ErrorF("-pixdepths list       support additional pixmap depths\n");
     ErrorF("+/-render             turn on/off RENDER extension support"
            " (default on)\n");
+#ifdef DRI3
+    ErrorF("-disable-dri3         disable Xlorie DRI3 import support\n");
+#endif
 }
 
 int
@@ -231,12 +286,22 @@ ddxProcessArgument(int argc, char *argv[], int i)
         return 2;
     }
 
+#ifdef DRI3
+    if (strcmp(argv[i], "-disable-dri3") == 0) {
+        Dri3 = FALSE;
+        return 1;
+    }
+#endif
+
     return 0;
 }
 
 static void
 lorieBlockHandler(void *blockData, void *timeout)
 {
+#ifdef PRESENT
+    loriePerformVblanks();
+#endif
     lorieRenderSignalFrame();
 }
 
@@ -244,6 +309,131 @@ static void
 lorieWakeupHandler(void *blockData, int result)
 {
 }
+
+static Bool
+lorieRealizeCursor(DeviceIntPtr pDev, ScreenPtr pScreen, CursorPtr pCurs)
+{
+    (void) pDev;
+    (void) pScreen;
+    (void) pCurs;
+    return TRUE;
+}
+
+static Bool
+lorieDeviceCursorInitialize(DeviceIntPtr pDev, ScreenPtr pScreen)
+{
+    (void) pDev;
+    (void) pScreen;
+    return TRUE;
+}
+
+static void
+lorieDeviceCursorCleanup(DeviceIntPtr pDev, ScreenPtr pScreen)
+{
+    (void) pDev;
+    (void) pScreen;
+}
+
+static void
+lorieMoveCursor(DeviceIntPtr pDev, ScreenPtr pScreen, int x, int y)
+{
+    struct lorie_shared_server_state *state = lorieRenderState();
+
+    (void) pDev;
+    (void) pScreen;
+
+    if (!state)
+        return;
+
+    state->cursor.x = x;
+    state->cursor.y = y;
+    state->cursor.moved = TRUE;
+    pthread_cond_signal(&state->cond);
+}
+
+static void
+lorieConvertCursor(CursorPtr pCurs, uint32_t *data)
+{
+    CursorBitsPtr bits = pCurs->bits;
+    int x, y;
+
+    if (bits->argb) {
+        int count = bits->width * bits->height;
+
+        for (int i = 0; i < count; i++) {
+            CARD32 p = bits->argb[i];
+
+            data[i] = (p & 0xff000000) |
+                ((p & 0x00ff0000) >> 16) |
+                (p & 0x0000ff00) |
+                ((p & 0x000000ff) << 16);
+        }
+        return;
+    }
+
+    uint32_t *p = data;
+    uint32_t fg = ((pCurs->foreBlue & 0xff00) << 8) |
+        (pCurs->foreGreen & 0xff00) | (pCurs->foreRed >> 8);
+    uint32_t bg = ((pCurs->backBlue & 0xff00) << 8) |
+        (pCurs->backGreen & 0xff00) | (pCurs->backRed >> 8);
+    int stride = BitmapBytePad(bits->width);
+
+    for (y = 0; y < bits->height; y++) {
+        for (x = 0; x < bits->width; x++) {
+            int i = y * stride + x / 8;
+            int bit = 1 << (x & 7);
+            uint32_t pixel = (bits->source[i] & bit) ? fg : bg;
+
+            *p++ = (bits->mask[i] & bit) ? pixel | 0xff000000 : 0;
+        }
+    }
+}
+
+static void
+lorieSetCursor(DeviceIntPtr pDev, ScreenPtr pScreen, CursorPtr pCurs,
+               int x, int y)
+{
+    struct lorie_shared_server_state *state = lorieRenderState();
+    CursorBitsPtr bits;
+
+    (void) pDev;
+    (void) pScreen;
+
+    if (!state)
+        return;
+
+    if (pCurs && (pCurs->bits->width >= 512 || pCurs->bits->height >= 512))
+        pCurs = rootCursor;
+
+    bits = pCurs ? pCurs->bits : NULL;
+
+    lorie_mutex_lock(&state->cursor.lock, &state->cursor.lockingPid);
+    if (bits) {
+        state->cursor.xhot = bits->xhot;
+        state->cursor.yhot = bits->yhot;
+        state->cursor.width = bits->width;
+        state->cursor.height = bits->height;
+        lorieConvertCursor(pCurs, state->cursor.bits);
+    } else {
+        state->cursor.xhot = 0;
+        state->cursor.yhot = 0;
+        state->cursor.width = 0;
+        state->cursor.height = 0;
+    }
+    state->cursor.updated = TRUE;
+    lorie_mutex_unlock(&state->cursor.lock, &state->cursor.lockingPid);
+
+    lorieMoveCursor(NULL, NULL, x, y);
+}
+
+static miPointerSpriteFuncRec loriePointerSpriteFuncs = {
+    lorieRealizeCursor,
+    lorieRealizeCursor,
+    lorieSetCursor,
+    lorieMoveCursor,
+    lorieDeviceCursorInitialize,
+    lorieDeviceCursorCleanup
+};
 
 static Bool
 lorieCursorOffScreen(ScreenPtr *ppScreen, int *x, int *y)
@@ -262,9 +452,404 @@ static miPointerScreenFuncRec loriePointerCursorFuncs = {
     miPointerWarpCursor
 };
 
+#ifdef PRESENT
+static void
+loriePresentUpdateMsc(void)
+{
+    uint64_t interval = lorieScreen.vblankInterval;
+
+    if (!interval)
+        interval = 1000000 / LORIE_DEFAULT_FRAMERATE;
+
+    lorieScreen.currentMsc = GetTimeInMicros() / interval;
+}
+
+static RRCrtcPtr
+loriePresentGetCrtc(WindowPtr window)
+{
+    return RRFirstEnabledCrtc(window->drawable.pScreen);
+}
+
+static int
+loriePresentGetUstMsc(RRCrtcPtr crtc, uint64_t *ust, uint64_t *msc)
+{
+    (void) crtc;
+
+    *ust = GetTimeInMicros();
+    loriePresentUpdateMsc();
+    *msc = lorieScreen.currentMsc;
+    return Success;
+}
+
+static Bool
+lorieQueuePresentEvent(uint64_t eventId, uint64_t msc)
+{
+    lorieVblankRec *vblank = calloc(1, sizeof(*vblank));
+
+    if (!vblank)
+        return FALSE;
+
+    vblank->id = eventId;
+    vblank->msc = msc;
+    xorg_list_add(&vblank->link, &lorieScreen.vblankQueue);
+    return TRUE;
+}
+
+static Bool
+loriePresentQueueVblank(RRCrtcPtr crtc, uint64_t eventId, uint64_t msc)
+{
+    (void) crtc;
+
+    loriePresentUpdateMsc();
+    if (msc <= lorieScreen.currentMsc) {
+        present_event_notify(eventId, GetTimeInMicros(), lorieScreen.currentMsc);
+        return Success;
+    }
+
+    if (!lorieQueuePresentEvent(eventId, msc))
+        return BadAlloc;
+
+    return Success;
+}
+
+static void
+loriePresentAbortVblank(RRCrtcPtr crtc, uint64_t eventId, uint64_t msc)
+{
+    lorieVblankRec *vblank, *tmp;
+
+    (void) crtc;
+    (void) msc;
+
+    xorg_list_for_each_entry_safe(vblank, tmp, &lorieScreen.vblankQueue, link) {
+        if (vblank->id == eventId) {
+            xorg_list_del(&vblank->link);
+            free(vblank);
+            return;
+        }
+    }
+}
+
+static void
+loriePerformVblanks(void)
+{
+    lorieVblankRec *vblank, *tmp;
+
+    loriePresentUpdateMsc();
+    xorg_list_for_each_entry_safe(vblank, tmp, &lorieScreen.vblankQueue, link) {
+        if (vblank->msc <= lorieScreen.currentMsc) {
+            present_event_notify(vblank->id, GetTimeInMicros(),
+                                 lorieScreen.currentMsc);
+            xorg_list_del(&vblank->link);
+            free(vblank);
+        }
+    }
+}
+
+static Bool
+loriePresentCheckFlip(RRCrtcPtr crtc, WindowPtr window, PixmapPtr pixmap,
+                      Bool syncFlip)
+{
+#ifdef DRI3
+    loriePixmapPriv *priv;
+
+    (void) crtc;
+    (void) syncFlip;
+
+    if (!Dri3 || !window || !pixmap)
+        return FALSE;
+
+    priv = dixLookupPrivate(&pixmap->devPrivates, &loriePixmapPrivateKey);
+    if (!priv || !priv->buffer)
+        return FALSE;
+
+    return pixmap->drawable.width == window->drawable.pScreen->width &&
+        pixmap->drawable.height == window->drawable.pScreen->height;
+#else
+    (void) crtc;
+    (void) window;
+    (void) pixmap;
+    (void) syncFlip;
+    return FALSE;
+#endif
+}
+
+static Bool
+loriePresentFlip(RRCrtcPtr crtc, uint64_t eventId, uint64_t targetMsc,
+                 PixmapPtr pixmap, Bool syncFlip)
+{
+#ifdef DRI3
+    loriePixmapPriv *priv;
+    lorieVblankRec *event;
+    Bool registeredNow = FALSE;
+
+    (void) crtc;
+    (void) syncFlip;
+
+    if (!Dri3 || !pixmap)
+        return FALSE;
+
+    priv = dixLookupPrivate(&pixmap->devPrivates, &loriePixmapPrivateKey);
+    if (!priv || !priv->buffer)
+        return FALSE;
+
+    loriePresentUpdateMsc();
+    if (targetMsc <= lorieScreen.currentMsc)
+        targetMsc = lorieScreen.currentMsc + 1;
+
+    event = calloc(1, sizeof(*event));
+    if (!event)
+        return FALSE;
+
+    if (!priv->registered) {
+        if (!lorieRenderRegisterBuffer(priv->buffer)) {
+            free(event);
+            return FALSE;
+        }
+        priv->registered = TRUE;
+        registeredNow = TRUE;
+    }
+
+    if (!lorieRenderUseBuffer(priv->buffer)) {
+        if (registeredNow) {
+            (void) lorieRenderUnregisterBuffer(priv->buffer);
+            priv->registered = FALSE;
+        }
+        free(event);
+        return FALSE;
+    }
+
+    event->id = eventId;
+    event->msc = targetMsc;
+    xorg_list_add(&event->link, &lorieScreen.vblankQueue);
+
+    return TRUE;
+#else
+    (void) crtc;
+    (void) eventId;
+    (void) targetMsc;
+    (void) pixmap;
+    (void) syncFlip;
+    return FALSE;
+#endif
+}
+
+static void
+loriePresentUnflip(ScreenPtr screen, uint64_t eventId)
+{
+    (void) screen;
+
+    (void) lorieRenderUseBuffer(lorieRenderBuffer());
+    present_event_notify(eventId, 0, 0);
+}
+
+static present_screen_info_rec loriePresentInfo = {
+    .version = PRESENT_SCREEN_INFO_VERSION,
+    .get_crtc = loriePresentGetCrtc,
+    .get_ust_msc = loriePresentGetUstMsc,
+    .queue_vblank = loriePresentQueueVblank,
+    .abort_vblank = loriePresentAbortVblank,
+    .capabilities = PresentCapabilityNone,
+    .check_flip = loriePresentCheckFlip,
+    .flip = loriePresentFlip,
+    .unflip = loriePresentUnflip,
+};
+#endif
+
+#ifdef DRI3
+static loriePixmapPriv *
+loriePixmapPrivate(PixmapPtr pixmap)
+{
+    return dixLookupPrivate(&pixmap->devPrivates, &loriePixmapPrivateKey);
+}
+
+static Bool
+lorieDestroyPixmap(PixmapPtr pixmap)
+{
+    loriePixmapPriv *priv = loriePixmapPrivate(pixmap);
+
+    if (pixmap->refcnt == 1 && priv && priv->buffer) {
+        if (priv->registered)
+            (void) lorieRenderUnregisterBuffer(priv->buffer);
+        if (priv->locked)
+            (void) LorieBuffer_unlock(priv->buffer);
+        LorieBuffer_release(priv->buffer);
+        priv->buffer = NULL;
+        priv->locked = NULL;
+        priv->registered = FALSE;
+    }
+
+    return lorieScreen.destroyPixmap(pixmap);
+}
+
+static PixmapPtr
+lorieDri3PixmapFromFds(ScreenPtr screen, CARD8 numFds, const int *fds,
+                       CARD16 width, CARD16 height, const CARD32 *strides,
+                       const CARD32 *offsets, CARD8 depth, CARD8 bpp,
+                       CARD64 modifier)
+{
+    PixmapPtr pixmap = NullPixmap;
+    loriePixmapPriv *priv;
+    LorieBuffer *buffer;
+    void *data = NULL;
+
+    if (numFds != 1 || !fds || !strides || !offsets)
+        return NullPixmap;
+
+    if (modifier != DRM_FORMAT_MOD_INVALID && modifier != DRM_FORMAT_MOD_LINEAR)
+        return NullPixmap;
+
+    if (width == 0 || height == 0 || strides[0] == 0 || bpp != 32)
+        return NullPixmap;
+
+    if (depth != 24 && depth != 32)
+        return NullPixmap;
+
+    if (offsets[0] != 0 || strides[0] % sizeof(uint32_t) != 0)
+        return NullPixmap;
+
+    buffer = LorieBuffer_wrapFileDescriptor(width,
+                                            strides[0] / sizeof(uint32_t),
+                                            height,
+                                            AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM,
+                                            fds[0], offsets[0]);
+    if (!buffer)
+        return NullPixmap;
+
+    if (LorieBuffer_lock(buffer, &data) != 0 || !data) {
+        LorieBuffer_release(buffer);
+        return NullPixmap;
+    }
+
+    pixmap = screen->CreatePixmap(screen, 0, 0, depth, 0);
+    if (!pixmap)
+        goto fail;
+
+    if (!screen->ModifyPixmapHeader(pixmap, width, height, depth, bpp,
+                                    strides[0], data))
+        goto fail;
+
+    priv = loriePixmapPrivate(pixmap);
+    if (!priv)
+        goto fail;
+    priv->buffer = buffer;
+    priv->locked = data;
+    priv->registered = FALSE;
+    return pixmap;
+
+fail:
+    if (pixmap)
+        screen->DestroyPixmap(pixmap);
+    LorieBuffer_unlock(buffer);
+    LorieBuffer_release(buffer);
+    return NullPixmap;
+}
+
+static int
+lorieDri3FdFromPixmap(ScreenPtr screen, PixmapPtr pixmap, CARD16 *stride,
+                      CARD32 *size)
+{
+    (void) screen;
+    (void) pixmap;
+
+    if (stride)
+        *stride = 0;
+    if (size)
+        *size = 0;
+    return -1;
+}
+
+static int
+lorieDri3FdsFromPixmap(ScreenPtr screen, PixmapPtr pixmap, int *fds,
+                       uint32_t *strides, uint32_t *offsets,
+                       uint64_t *modifier)
+{
+    (void) screen;
+    (void) pixmap;
+    (void) fds;
+    (void) strides;
+    (void) offsets;
+    (void) modifier;
+    return 0;
+}
+
+static int
+lorieDri3GetFormats(ScreenPtr screen, CARD32 *numFormats, CARD32 **formats)
+{
+    static CARD32 supportedFormats[] = {
+        DRM_FORMAT_XRGB8888,
+        DRM_FORMAT_ARGB8888,
+    };
+
+    (void) screen;
+
+    *numFormats = sizeof(supportedFormats) / sizeof(supportedFormats[0]);
+    *formats = supportedFormats;
+    return TRUE;
+}
+
+static int
+lorieDri3GetModifiers(ScreenPtr screen, uint32_t format,
+                      uint32_t *numModifiers, uint64_t **modifiers)
+{
+    static uint64_t supportedModifiers[] = {
+        DRM_FORMAT_MOD_LINEAR,
+    };
+
+    (void) screen;
+
+    if (format != DRM_FORMAT_XRGB8888 && format != DRM_FORMAT_ARGB8888) {
+        *numModifiers = 0;
+        *modifiers = NULL;
+        return TRUE;
+    }
+
+    *numModifiers = sizeof(supportedModifiers) / sizeof(supportedModifiers[0]);
+    *modifiers = supportedModifiers;
+    return TRUE;
+}
+
+static int
+lorieDri3GetDrawableModifiers(DrawablePtr drawable, uint32_t format,
+                              uint32_t *numModifiers, uint64_t **modifiers)
+{
+    uint64_t *out;
+
+    (void) drawable;
+
+    if (format != DRM_FORMAT_XRGB8888 && format != DRM_FORMAT_ARGB8888) {
+        *numModifiers = 0;
+        *modifiers = NULL;
+        return TRUE;
+    }
+
+    out = calloc(1, sizeof(*out));
+    if (!out)
+        return FALSE;
+
+    out[0] = DRM_FORMAT_MOD_LINEAR;
+    *numModifiers = 1;
+    *modifiers = out;
+    return TRUE;
+}
+
+static dri3_screen_info_rec lorieDri3Info = {
+    .version = 2,
+    .pixmap_from_fds = lorieDri3PixmapFromFds,
+    .fd_from_pixmap = lorieDri3FdFromPixmap,
+    .fds_from_pixmap = lorieDri3FdsFromPixmap,
+    .get_formats = lorieDri3GetFormats,
+    .get_modifiers = lorieDri3GetModifiers,
+    .get_drawable_modifiers = lorieDri3GetDrawableModifiers,
+};
+#endif
+
 static Bool
 lorieCloseScreen(ScreenPtr pScreen)
 {
+#ifdef PRESENT
+    lorieVblankRec *vblank, *tmp;
+#endif
+
     pScreen->CloseScreen = lorieScreen.closeScreen;
 
     if (blockHandlersRegistered) {
@@ -272,6 +857,13 @@ lorieCloseScreen(ScreenPtr pScreen)
                                      NULL);
         blockHandlersRegistered = FALSE;
     }
+
+#ifdef PRESENT
+    xorg_list_for_each_entry_safe(vblank, tmp, &lorieScreen.vblankQueue, link) {
+        xorg_list_del(&vblank->link);
+        free(vblank);
+    }
+#endif
 
     if (pScreen->devPrivate)
         (*pScreen->DestroyPixmap) (pScreen->devPrivate);
@@ -402,6 +994,21 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
         return FALSE;
     }
 
+#ifdef DRI3
+    if (Dri3 &&
+        !dixRegisterPrivateKey(&loriePixmapPrivateKey, PRIVATE_PIXMAP,
+                               sizeof(loriePixmapPriv)))
+        return FALSE;
+#endif
+
+#ifdef PRESENT
+    xorg_list_init(&lorieScreen.vblankQueue);
+    lorieScreen.vblankInterval =
+        1000000 / (lorieScreen.framerate > 0 ?
+                   lorieScreen.framerate : LORIE_DEFAULT_FRAMERATE);
+    loriePresentUpdateMsc();
+#endif
+
     if (!lorieRenderConnect(lorieScreen.width, lorieScreen.height,
                             lorieScreen.framerate))
         return FALSE;
@@ -436,13 +1043,30 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
     if (!ret)
         return FALSE;
 
+#ifdef DRI3
+    if (Dri3) {
+        lorieScreen.destroyPixmap = pScreen->DestroyPixmap;
+        pScreen->DestroyPixmap = lorieDestroyPixmap;
+
+        if (!dri3_screen_init(pScreen, &lorieDri3Info))
+            return FALSE;
+    }
+#endif
+
     if (Render && !fbPictureInit(pScreen, 0, 0))
         return FALSE;
 
     if (!lorieRandRInit(pScreen))
         return FALSE;
 
-    miDCInitialize(pScreen, &loriePointerCursorFuncs);
+#ifdef PRESENT
+    if (!present_screen_init(pScreen, &loriePresentInfo))
+        return FALSE;
+#endif
+
+    if (!miPointerInitialize(pScreen, &loriePointerSpriteFuncs,
+                             &loriePointerCursorFuncs, TRUE))
+        return FALSE;
 
     pScreen->blackPixel = lorieScreen.blackPixel;
     pScreen->whitePixel = lorieScreen.whitePixel;
@@ -484,6 +1108,7 @@ InitOutput(ScreenInfo *screenInfo, int argc, char **argv)
     }
 
     xorgGlxCreateVendor();
+    lorieInitClipboard();
 
     for (i = 1; i <= 32; i++) {
         if (loriePixmapDepths[i]) {

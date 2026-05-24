@@ -13,6 +13,7 @@
 #include <X11/Xos.h>
 #include <X11/Xproto.h>
 
+#include "dix.h"
 #include "exevents.h"
 #include "inputstr.h"
 #include "inpututils.h"
@@ -226,6 +227,43 @@ drainBytes(int fd, size_t count)
     }
 }
 
+static Bool
+readBytes(int fd, void *buffer, size_t count)
+{
+    size_t offset = 0;
+
+    while (offset < count) {
+        ssize_t ret = read(fd, (char *) buffer + offset, count - offset);
+
+        if (ret > 0) {
+            offset += ret;
+            continue;
+        }
+        if (ret < 0 && errno == EINTR)
+            continue;
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static Bool
+handleClipboardAnnounce(ClientPtr client, void *closure)
+{
+    (void) client;
+    (void) closure;
+    lorieHandleClipboardAnnounce();
+    return TRUE;
+}
+
+static Bool
+handleClipboardData(ClientPtr client, void *closure)
+{
+    (void) client;
+    lorieHandleClipboardData(closure);
+    return TRUE;
+}
+
 static void
 handleTouchEvent(lorieEvent *event)
 {
@@ -329,9 +367,33 @@ lorieInputNotify(int fd, int ready, void *data)
         case EVENT_SCREEN_SIZE:
             drainBytes(fd, event.screenSize.name_size);
             break;
-        case EVENT_CLIPBOARD_SEND:
-            drainBytes(fd, event.clipboardSend.count);
+        case EVENT_CLIPBOARD_ENABLE:
+            lorieEnableClipboardSync(event.clipboardEnable.enable);
             break;
+        case EVENT_CLIPBOARD_ANNOUNCE:
+            QueueWorkProc(handleClipboardAnnounce, NULL, NULL);
+            break;
+        case EVENT_CLIPBOARD_SEND: {
+            char *data;
+
+            if (event.clipboardSend.count > 16 * 1024 * 1024) {
+                drainBytes(fd, event.clipboardSend.count);
+                break;
+            }
+            data = calloc(1, event.clipboardSend.count + 1);
+            if (!data) {
+                drainBytes(fd, event.clipboardSend.count);
+                break;
+            }
+            if (!readBytes(fd, data, event.clipboardSend.count)) {
+                free(data);
+                lorieInputUnregister();
+                return;
+            }
+            data[event.clipboardSend.count] = '\0';
+            QueueWorkProc(handleClipboardData, NULL, data);
+            break;
+        }
         case EVENT_STOP_RENDER:
             lorieInputUnregister();
             return;
@@ -365,6 +427,8 @@ lorieInputRegisterFd(int fd)
 void
 lorieInputUnregister(void)
 {
+    lorieEnableClipboardSync(FALSE);
+
     if (registeredInputFd >= 0) {
         RemoveNotifyFd(registeredInputFd);
         registeredInputFd = -1;

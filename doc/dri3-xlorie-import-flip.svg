@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#24343d"/>
+    </marker>
+    <style>
+      text { font-family: Arial, "PingFang SC", sans-serif; fill: #142229; }
+      .title { font-size: 28px; font-weight: 700; }
+      .box-title { font-size: 17px; font-weight: 700; }
+      .body { font-size: 14px; }
+      .small { font-size: 12.5px; fill: #465860; }
+      .box { fill: #fbfcfd; stroke: #8297a1; stroke-width: 2; rx: 8; }
+      .client { fill: #f7f0ff; stroke: #8d6bb7; }
+      .xserver { fill: #eef7ff; stroke: #4b88bd; }
+      .lorie { fill: #effcf2; stroke: #57a565; }
+      .present { fill: #fff7e9; stroke: #cb8a2e; }
+      .renderer { fill: #fff0f1; stroke: #c35d67; }
+      .line { stroke: #24343d; stroke-width: 2.1; fill: none; marker-end: url(#arrow); }
+      .dash { stroke-dasharray: 7 6; }
+      .label-bg { fill: #ffffff; opacity: .9; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <text x="40" y="48" class="title">Xlorie DRI3 import and Present flip</text>
+
+  <rect x="35" y="105" width="190" height="110" class="box client"/>
+  <text x="55" y="136" class="box-title">Client renderer</text>
+  <text x="55" y="166" class="body">allocates buffer</text>
+  <text x="55" y="188" class="small">fd + stride + modifier</text>
+
+  <rect x="280" y="90" width="210" height="140" class="box xserver"/>
+  <text x="302" y="122" class="box-title">DRI3 request</text>
+  <text x="302" y="152" class="body">PixmapFromBuffer(s)</text>
+  <text x="302" y="176" class="small">validates geometry</text>
+  <text x="302" y="198" class="small">closes client fd later</text>
+
+  <rect x="545" y="90" width="260" height="140" class="box lorie"/>
+  <text x="567" y="122" class="box-title">lorieDri3PixmapFromFds</text>
+  <text x="567" y="152" class="body">wrap fd as LorieBuffer</text>
+  <text x="567" y="176" class="small">single fd, linear, offset 0</text>
+  <text x="567" y="198" class="small">BGRA8888, depth 24/32</text>
+
+  <rect x="860" y="90" width="215" height="140" class="box xserver"/>
+  <text x="882" y="122" class="box-title">Pixmap resource</text>
+  <text x="882" y="152" class="body">CreatePixmap shell</text>
+  <text x="882" y="176" class="small">ModifyPixmapHeader(data)</text>
+  <text x="882" y="198" class="small">loriePixmapPriv.buffer</text>
+
+  <rect x="545" y="310" width="260" height="140" class="box present"/>
+  <text x="567" y="342" class="box-title">Present flip</text>
+  <text x="567" y="372" class="body">check_flip validates size</text>
+  <text x="567" y="396" class="small">register buffer if needed</text>
+  <text x="567" y="418" class="small">queue completion event</text>
+
+  <rect x="860" y="310" width="215" height="140" class="box lorie"/>
+  <text x="882" y="342" class="box-title">render-adapter</text>
+  <text x="882" y="372" class="body">registerBufferToRender</text>
+  <text x="882" y="396" class="small">rootWindowTextureID = id</text>
+  <text x="882" y="418" class="small">drawRequested + cond</text>
+
+  <rect x="860" y="540" width="215" height="115" class="box renderer"/>
+  <text x="882" y="572" class="box-title">termux-x11 renderer</text>
+  <text x="882" y="602" class="body">attach buffer to GL</text>
+  <text x="882" y="626" class="small">bind texture by buffer id</text>
+
+  <rect x="1110" y="540" width="135" height="115" class="box renderer"/>
+  <text x="1130" y="572" class="box-title">LorieView</text>
+  <text x="1130" y="602" class="body">draws quad</text>
+  <text x="1130" y="626" class="small">visible frame</text>
+
+  <path class="line" d="M225 160 H280"/>
+  <text x="235" y="148" class="small">fd over X11</text>
+  <path class="line" d="M490 160 H545"/>
+  <path class="line" d="M805 160 H860"/>
+  <path class="line dash" d="M967 230 V310"/>
+  <text x="982" y="273" class="small">Pixmap used by Present</text>
+  <path class="line" d="M805 380 H860"/>
+  <path class="line" d="M967 450 V540"/>
+  <path class="line" d="M1075 598 H1110"/>
+
+  <path class="line dash" d="M545 405 C430 450, 340 430, 255 360"/>
+  <rect x="64" y="300" width="245" height="118" class="box present"/>
+  <text x="84" y="332" class="box-title">copy fallback</text>
+  <text x="84" y="362" class="body">If check_flip fails</text>
+  <text x="84" y="386" class="small">Present copies Pixmap into root</text>
+
+  <text x="40" y="690" class="small">Flip path is zero-copy at Xserver side: imported pixmap buffer is registered to renderer and selected by rootWindowTextureID.</text>
+</svg>
