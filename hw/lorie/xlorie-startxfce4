@@ -5,7 +5,7 @@ set -u
 DISPLAY_NAME="${XLORIE_DISPLAY:-:1}"
 SCREEN_SIZE="${XLORIE_SCREEN:-1280x720x24}"
 FRAMERATE="${XLORIE_FRAMERATE:-60}"
-RENDER_SOCKET="${XLORIE_RENDER_SOCKET:-/data/data/com.termux/files/home/tmp/termux-render}"
+RENDER_SOCKET="/data/data/com.termux/files/home/tmp/termux-render"
 XLORIE_BIN="${XLORIE_BIN:-Xlorie}"
 WAIT_RENDER="${XLORIE_WAIT_RENDER:-30}"
 WAIT_X="${XLORIE_WAIT_X:-20}"

@@ -5,18 +5,19 @@ endif
 lorie_srcs = [
     'InitInput.c',
     'InitOutput.c',
-    'buffer.c',
-    'render-client.c',
+    'render-adapter.c',
     'log.c',
     '../../mi/miinitext.c',
     '../../mi/miinitext.h',
 ]
 
+termux_render_dep = cc.find_library('termux-render', required: true)
+
 xlorie_server = executable(
     'Xlorie',
     lorie_srcs,
     include_directories: [inc, include_directories('.')],
-    dependencies: common_dep,
+    dependencies: common_dep + [termux_render_dep],
     link_with: [
         libxserver_main,
         libxserver_fb,

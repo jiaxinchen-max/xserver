@@ -137,7 +137,8 @@ ddxUseMsg(void)
 {
     ErrorF("-screen 0 WxHx24       set Xlorie screen size\n");
     ErrorF("-framerate n          set requested renderer framerate\n");
-    ErrorF("-render-socket path   set termux-render unix socket path\n");
+    ErrorF("-render-socket path   accepted for compatibility; "
+           "libtermux-render uses its default socket\n");
     ErrorF("-pixdepths list       support additional pixmap depths\n");
     ErrorF("+/-render             turn on/off RENDER extension support"
            " (default on)\n");

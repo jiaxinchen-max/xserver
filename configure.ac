@@ -1743,8 +1743,15 @@ AC_MSG_RESULT([$LORIE])
 AM_CONDITIONAL(XLORIE, [test "x$LORIE" = xyes])
 
 if test "x$LORIE" = xyes; then
+	AC_CHECK_HEADER([termux/render/render.h], [],
+		[AC_MSG_ERROR([Xlorie requires termux-render headers])])
+	lorie_save_LIBS="$LIBS"
+	AC_CHECK_LIB([termux-render], [connectToRenderWithConfig],
+		[XLORIE_RENDER_LIBS="-ltermux-render"],
+		[AC_MSG_ERROR([Xlorie requires libtermux-render])])
+	LIBS="$lorie_save_LIBS"
 	XLORIE_LIBS="$FB_LIB $FIXES_LIB $XEXT_LIB $DBE_LIB $RECORD_LIB $GLX_LIBS $RANDR_LIB $RENDER_LIB $DAMAGE_LIB $DRI3_LIB $PRESENT_LIB $MIEXT_SYNC_LIB $MIEXT_DAMAGE_LIB $MIEXT_SHADOW_LIB $XI_LIB $XKB_LIB $XKB_STUB_LIB $COMPOSITE_LIB"
-	XLORIE_SYS_LIBS="$GLX_SYS_LIBS"
+	XLORIE_SYS_LIBS="$GLX_SYS_LIBS $XLORIE_RENDER_LIBS"
 	AC_SUBST([XLORIE_LIBS])
 	AC_SUBST([XLORIE_SYS_LIBS])
 fi
