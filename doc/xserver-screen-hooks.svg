@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="780" viewBox="0 0 1180 780" role="img" aria-labelledby="title desc">
+  <title id="title">ScreenRec and rendering hook boundary</title>
+  <desc id="desc">ScreenRec as the boundary where DIX object management calls DDX, MI, FB, glamor, EXA, and extension wrappers.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #0f172a; }
+      .title { font-size: 26px; font-weight: 700; }
+      .label { font-size: 14px; font-weight: 700; }
+      .small { font-size: 12px; fill: #334155; }
+      .tiny { font-size: 11px; fill: #475569; }
+      .box { stroke: #334155; stroke-width: 1.35; rx: 8; ry: 8; }
+      .soft { stroke: #94a3b8; stroke-width: 1.15; rx: 7; ry: 7; }
+      .arrow { fill: none; stroke: #334155; stroke-width: 1.55; marker-end: url(#arrow); }
+      .arrow-soft { fill: none; stroke: #64748b; stroke-width: 1.25; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1180" height="780" fill="#f8fafc"/>
+  <text x="40" y="48" class="title">ScreenRec and Rendering Hook Boundary</text>
+
+  <rect x="80" y="115" width="240" height="150" fill="#fef3c7" class="box"/>
+  <text x="200" y="145" text-anchor="middle" class="label">DIX object model</text>
+  <text x="200" y="170" text-anchor="middle" class="tiny">WindowRec / DrawableRec</text>
+  <text x="200" y="190" text-anchor="middle" class="tiny">PixmapRec / GC / Resource</text>
+  <text x="200" y="220" text-anchor="middle" class="tiny">CreateWindow(), ProcCopyArea()</text>
+  <text x="200" y="240" text-anchor="middle" class="tiny">CreateGC(), event delivery</text>
+
+  <rect x="80" y="315" width="240" height="130" fill="#ede9fe" class="box"/>
+  <text x="200" y="345" text-anchor="middle" class="label">Extension wrappers</text>
+  <text x="200" y="370" text-anchor="middle" class="tiny">composite, damage, render</text>
+  <text x="200" y="390" text-anchor="middle" class="tiny">randr, present, dri3, glx</text>
+  <text x="200" y="420" text-anchor="middle" class="tiny">wrap pScreen hooks</text>
+
+  <rect x="420" y="115" width="340" height="330" fill="#e0f2fe" class="box"/>
+  <text x="590" y="145" text-anchor="middle" class="label">ScreenRec: include/scrnintstr.h</text>
+  <rect x="445" y="172" width="130" height="46" fill="#f8fafc" class="soft"/>
+  <text x="510" y="193" text-anchor="middle" class="tiny">Window procs</text>
+  <text x="510" y="210" text-anchor="middle" class="tiny">Create/Realize/Copy</text>
+  <rect x="605" y="172" width="130" height="46" fill="#f8fafc" class="soft"/>
+  <text x="670" y="193" text-anchor="middle" class="tiny">Pixmap procs</text>
+  <text x="670" y="210" text-anchor="middle" class="tiny">Create/Destroy</text>
+  <rect x="445" y="238" width="130" height="46" fill="#f8fafc" class="soft"/>
+  <text x="510" y="259" text-anchor="middle" class="tiny">GC creation</text>
+  <text x="510" y="276" text-anchor="middle" class="tiny">CreateGC()</text>
+  <rect x="605" y="238" width="130" height="46" fill="#f8fafc" class="soft"/>
+  <text x="670" y="259" text-anchor="middle" class="tiny">Image/spans</text>
+  <text x="670" y="276" text-anchor="middle" class="tiny">GetImage/GetSpans</text>
+  <rect x="445" y="304" width="130" height="46" fill="#f8fafc" class="soft"/>
+  <text x="510" y="325" text-anchor="middle" class="tiny">Cursor/input</text>
+  <text x="510" y="342" text-anchor="middle" class="tiny">DisplayCursor</text>
+  <rect x="605" y="304" width="130" height="46" fill="#f8fafc" class="soft"/>
+  <text x="670" y="325" text-anchor="middle" class="tiny">Colormap</text>
+  <text x="670" y="342" text-anchor="middle" class="tiny">Install/Store</text>
+  <rect x="445" y="370" width="290" height="46" fill="#f8fafc" class="soft"/>
+  <text x="590" y="391" text-anchor="middle" class="tiny">Block/Wakeup, GPU pixmap sharing, DPMS</text>
+  <text x="590" y="408" text-anchor="middle" class="tiny">screenInfo.screens[] / gpuscreens[]</text>
+
+  <rect x="860" y="115" width="240" height="150" fill="#fce7f3" class="box"/>
+  <text x="980" y="145" text-anchor="middle" class="label">GC ops: include/gcstruct.h</text>
+  <text x="980" y="170" text-anchor="middle" class="tiny">FillSpans, PutImage</text>
+  <text x="980" y="190" text-anchor="middle" class="tiny">CopyArea, PolyFillRect</text>
+  <text x="980" y="220" text-anchor="middle" class="tiny">ValidateGC, ChangeGC</text>
+  <text x="980" y="240" text-anchor="middle" class="tiny">installed by pScreen-&gt;CreateGC</text>
+
+  <rect x="420" y="530" width="340" height="150" fill="#dcfce7" class="box"/>
+  <text x="590" y="560" text-anchor="middle" class="label">Default implementations</text>
+  <text x="590" y="588" text-anchor="middle" class="tiny">mi/miscrinit.c sets generic screen behavior</text>
+  <text x="590" y="608" text-anchor="middle" class="tiny">fb/fbscreen.c sets software framebuffer hooks</text>
+  <text x="590" y="628" text-anchor="middle" class="tiny">fb/fbgc.c installs software GC ops</text>
+  <text x="590" y="648" text-anchor="middle" class="tiny">miext adds damage, shadow, sync helpers</text>
+
+  <rect x="80" y="530" width="240" height="150" fill="#e2e8f0" class="box"/>
+  <text x="200" y="560" text-anchor="middle" class="label">DDX backends</text>
+  <text x="200" y="588" text-anchor="middle" class="tiny">hw/xfree86: drivers/modules</text>
+  <text x="200" y="608" text-anchor="middle" class="tiny">hw/vfb: memory framebuffer</text>
+  <text x="200" y="628" text-anchor="middle" class="tiny">hw/xnest, kdrive/ephyr: host X</text>
+  <text x="200" y="648" text-anchor="middle" class="tiny">hw/xquartz, xwin: platform windows</text>
+
+  <rect x="860" y="530" width="240" height="150" fill="#ccfbf1" class="box"/>
+  <text x="980" y="560" text-anchor="middle" class="label">Acceleration / driver code</text>
+  <text x="980" y="588" text-anchor="middle" class="tiny">glamor: OpenGL path</text>
+  <text x="980" y="608" text-anchor="middle" class="tiny">exa: 2D acceleration API</text>
+  <text x="980" y="628" text-anchor="middle" class="tiny">modesetting: DRM/GBM/pageflip</text>
+  <text x="980" y="648" text-anchor="middle" class="tiny">drivers may wrap ScreenRec hooks</text>
+
+  <path d="M 320 190 L 420 245" class="arrow"/>
+  <path d="M 320 380 L 420 330" class="arrow-soft"/>
+  <path d="M 760 255 L 860 190" class="arrow"/>
+  <path d="M 590 445 L 590 530" class="arrow"/>
+  <path d="M 320 605 L 420 605" class="arrow-soft"/>
+  <path d="M 760 605 L 860 605" class="arrow-soft"/>
+  <path d="M 980 530 C 980 470 725 470 705 445" class="arrow-soft"/>
+  <path d="M 200 530 C 200 470 455 470 475 445" class="arrow-soft"/>
+
+  <text x="366" y="206" class="tiny">calls</text>
+  <text x="348" y="354" class="tiny">wraps</text>
+  <text x="790" y="208" class="tiny">creates</text>
+  <text x="625" y="493" class="tiny">base hooks</text>
+  <text x="343" y="590" class="tiny">sets</text>
+  <text x="789" y="590" class="tiny">overrides</text>
+</svg>

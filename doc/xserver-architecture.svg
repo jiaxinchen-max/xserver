@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="820" viewBox="0 0 1180 820" role="img" aria-labelledby="title desc">
+  <title id="title">Xorg server module architecture</title>
+  <desc id="desc">Layered architecture of xorg-server modules, from clients through OS transport, DIX core, extensions, MI/FB helpers, and DDX backends.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-soft" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #0f172a; }
+      .title { font-size: 26px; font-weight: 700; }
+      .subtitle { font-size: 13px; fill: #475569; }
+      .label { font-size: 15px; font-weight: 700; }
+      .small { font-size: 12px; fill: #334155; }
+      .tiny { font-size: 11px; fill: #475569; }
+      .box { stroke: #334155; stroke-width: 1.4; rx: 8; ry: 8; }
+      .soft { stroke: #94a3b8; stroke-width: 1.2; rx: 8; ry: 8; }
+      .dash { stroke-dasharray: 6 5; }
+      .arrow { fill: none; stroke: #334155; stroke-width: 1.7; marker-end: url(#arrow); }
+      .arrow-soft { fill: none; stroke: #64748b; stroke-width: 1.4; marker-end: url(#arrow-soft); }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1180" height="820" fill="#f8fafc"/>
+  <text x="40" y="48" class="title">Xorg Server Architecture</text>
+  <text x="40" y="72" class="subtitle">Common DIX/OS/MI core linked with selected DDX backend and optional acceleration/extensions</text>
+
+  <rect x="405" y="105" width="370" height="64" fill="#e0f2fe" class="box"/>
+  <text x="590" y="133" text-anchor="middle" class="label">X clients</text>
+  <text x="590" y="154" text-anchor="middle" class="small">toolkits, apps, window manager, compositor</text>
+
+  <rect x="405" y="210" width="370" height="72" fill="#dcfce7" class="box"/>
+  <text x="590" y="238" text-anchor="middle" class="label">OS layer: os/</text>
+  <text x="590" y="259" text-anchor="middle" class="small">Xtrans sockets, auth, poll, timers, IO buffers, logging</text>
+
+  <rect x="260" y="330" width="660" height="132" fill="#fef3c7" class="box"/>
+  <text x="590" y="360" text-anchor="middle" class="label">DIX core: dix/</text>
+  <text x="590" y="383" text-anchor="middle" class="small">protocol dispatch, resources, atoms, windows, pixmaps, GCs, selections, events, input core</text>
+  <rect x="282" y="405" width="116" height="34" fill="#fff7ed" class="soft"/>
+  <text x="340" y="427" text-anchor="middle" class="tiny">dispatch.c</text>
+  <rect x="415" y="405" width="116" height="34" fill="#fff7ed" class="soft"/>
+  <text x="473" y="427" text-anchor="middle" class="tiny">resource.c</text>
+  <rect x="548" y="405" width="116" height="34" fill="#fff7ed" class="soft"/>
+  <text x="606" y="427" text-anchor="middle" class="tiny">window.c</text>
+  <rect x="681" y="405" width="116" height="34" fill="#fff7ed" class="soft"/>
+  <text x="739" y="427" text-anchor="middle" class="tiny">events.c</text>
+  <rect x="814" y="405" width="84" height="34" fill="#fff7ed" class="soft"/>
+  <text x="856" y="427" text-anchor="middle" class="tiny">gc.c</text>
+
+  <rect x="950" y="310" width="190" height="180" fill="#ede9fe" class="box"/>
+  <text x="1045" y="337" text-anchor="middle" class="label">Extensions</text>
+  <text x="1045" y="362" text-anchor="middle" class="tiny">Xext, Xi, xkb</text>
+  <text x="1045" y="382" text-anchor="middle" class="tiny">render, randr</text>
+  <text x="1045" y="402" text-anchor="middle" class="tiny">composite, damage</text>
+  <text x="1045" y="422" text-anchor="middle" class="tiny">present, dri3, glx</text>
+  <text x="1045" y="452" text-anchor="middle" class="tiny">AddExtension()</text>
+  <text x="1045" y="471" text-anchor="middle" class="tiny">major opcode dispatch</text>
+
+  <rect x="260" y="520" width="660" height="104" fill="#fce7f3" class="box"/>
+  <text x="590" y="548" text-anchor="middle" class="label">Reusable rendering and helper code</text>
+  <rect x="286" y="570" width="170" height="34" fill="#fff1f2" class="soft"/>
+  <text x="371" y="592" text-anchor="middle" class="small">MI: mi/</text>
+  <rect x="505" y="570" width="170" height="34" fill="#fff1f2" class="soft"/>
+  <text x="590" y="592" text-anchor="middle" class="small">FB/WFB: fb/</text>
+  <rect x="724" y="570" width="170" height="34" fill="#fff1f2" class="soft"/>
+  <text x="809" y="592" text-anchor="middle" class="small">glamor, exa, miext</text>
+
+  <rect x="120" y="680" width="940" height="86" fill="#e2e8f0" class="box"/>
+  <text x="590" y="707" text-anchor="middle" class="label">DDX backends: hw/</text>
+  <rect x="145" y="728" width="142" height="26" fill="#f8fafc" class="soft"/>
+  <text x="216" y="746" text-anchor="middle" class="tiny">Xorg / xfree86</text>
+  <rect x="316" y="728" width="118" height="26" fill="#f8fafc" class="soft"/>
+  <text x="375" y="746" text-anchor="middle" class="tiny">Xvfb</text>
+  <rect x="463" y="728" width="142" height="26" fill="#f8fafc" class="soft"/>
+  <text x="534" y="746" text-anchor="middle" class="tiny">Xnest / Xephyr</text>
+  <rect x="634" y="728" width="118" height="26" fill="#f8fafc" class="soft"/>
+  <text x="693" y="746" text-anchor="middle" class="tiny">Xquartz</text>
+  <rect x="781" y="728" width="118" height="26" fill="#f8fafc" class="soft"/>
+  <text x="840" y="746" text-anchor="middle" class="tiny">XWin</text>
+  <rect x="928" y="728" width="102" height="26" fill="#f8fafc" class="soft"/>
+  <text x="979" y="746" text-anchor="middle" class="tiny">KDrive</text>
+
+  <rect x="50" y="260" width="170" height="92" fill="#ccfbf1" class="box"/>
+  <text x="135" y="288" text-anchor="middle" class="label">Input devices</text>
+  <text x="135" y="311" text-anchor="middle" class="tiny">kernel/platform fds</text>
+  <text x="135" y="330" text-anchor="middle" class="tiny">DDX input drivers</text>
+
+  <rect x="50" y="420" width="170" height="96" fill="#ccfbf1" class="box"/>
+  <text x="135" y="448" text-anchor="middle" class="label">MI event queue</text>
+  <text x="135" y="471" text-anchor="middle" class="tiny">mi/mieq.c</text>
+  <text x="135" y="490" text-anchor="middle" class="tiny">InputCheckPending()</text>
+
+  <path d="M 590 169 L 590 210" class="arrow"/>
+  <path d="M 590 282 L 590 330" class="arrow"/>
+  <path d="M 590 462 L 590 520" class="arrow"/>
+  <path d="M 590 624 L 590 680" class="arrow"/>
+  <path d="M 920 395 L 950 395" class="arrow-soft"/>
+  <path d="M 950 365 L 920 365" class="arrow-soft"/>
+  <path d="M 220 306 C 285 306 285 396 260 396" class="arrow-soft"/>
+  <path d="M 135 352 L 135 420" class="arrow-soft"/>
+  <path d="M 220 468 C 246 468 246 430 260 430" class="arrow-soft"/>
+  <path d="M 405 246 C 318 246 230 252 206 275" class="arrow-soft dash"/>
+
+  <text x="624" y="196" class="tiny">X11 protocol over local/TCP transports</text>
+  <text x="624" y="312" class="tiny">requests, replies, events, errors</text>
+  <text x="622" y="501" class="tiny">ScreenRec / GC ops / hooks</text>
+  <text x="622" y="660" class="tiny">platform screen, input, GPU and host integration</text>
+</svg>
