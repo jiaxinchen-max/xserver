@@ -63,6 +63,7 @@
 #endif
 
 typedef struct {
+    ScreenPtr screen;
     int width;
     int height;
     int depth;
@@ -123,6 +124,47 @@ static Bool Dri3 = TRUE;
 #ifdef PRESENT
 static void loriePerformVblanks(void);
 #endif
+
+static Bool
+lorieFlushRootBuffer(void)
+{
+    LorieBuffer *buffer = lorieRenderBuffer();
+    const LorieBuffer_Desc *desc = LorieBuffer_description(buffer);
+    PixmapPtr pixmap;
+    void *fb = NULL;
+    int ret;
+
+    if (!buffer || desc->type != LORIEBUFFER_AHARDWAREBUFFER)
+        return TRUE;
+
+    if (!lorieScreen.fb)
+        return TRUE;
+
+    ret = LorieBuffer_unlock(buffer);
+    if (ret != 0)
+        return FALSE;
+
+    ret = LorieBuffer_lock(buffer, &fb);
+    if (ret != 0 || !fb)
+        return FALSE;
+
+    if (fb == lorieScreen.fb)
+        return TRUE;
+
+    lorieScreen.fb = fb;
+    pixmap = lorieScreen.screen ? lorieScreen.screen->GetScreenPixmap(lorieScreen.screen) :
+        NULL;
+    if (!pixmap)
+        return TRUE;
+
+    return lorieScreen.screen->ModifyPixmapHeader(pixmap,
+                                                  lorieScreen.width,
+                                                  lorieScreen.height,
+                                                  lorieScreen.depth,
+                                                  lorieScreen.bitsPerPixel,
+                                                  lorieScreen.paddedBytesWidth,
+                                                  lorieScreen.fb);
+}
 
 static void
 lorieInitializePixmapDepths(void)
@@ -302,6 +344,8 @@ lorieBlockHandler(void *blockData, void *timeout)
 #ifdef PRESENT
     loriePerformVblanks();
 #endif
+    if (!lorieFlushRootBuffer())
+        lorieLog("Failed to flush Xlorie root AHardwareBuffer\n");
     lorieRenderSignalFrame();
 }
 
@@ -1020,6 +1064,7 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
 
     desc = LorieBuffer_description(lorieRenderBuffer());
     lorieScreen.fb = fb;
+    lorieScreen.screen = pScreen;
     lorieScreen.width = desc->width;
     lorieScreen.height = desc->height;
     lorieScreen.bitsPerPixel = 32;
