@@ -80,6 +80,7 @@ typedef struct {
     Pixel blackPixel;
     Pixel whitePixel;
     unsigned int lineBias;
+    CreateScreenResourcesProcPtr createScreenResources;
     CloseScreenProcPtr closeScreen;
 #ifdef DRI3
     DestroyPixmapProcPtr destroyPixmap;
@@ -932,6 +933,7 @@ lorieCloseScreen(ScreenPtr pScreen)
 #endif
 
     pScreen->CloseScreen = lorieScreen.closeScreen;
+    pScreen->CreateScreenResources = lorieScreen.createScreenResources;
 
     if (blockHandlersRegistered) {
         RemoveBlockAndWakeupHandlers(lorieBlockHandler, lorieWakeupHandler,
@@ -1203,6 +1205,22 @@ lorieRandRInit(ScreenPtr pScreen)
     return TRUE;
 }
 
+static Bool
+lorieCreateScreenResources(ScreenPtr pScreen)
+{
+    Bool ret = TRUE;
+
+    if (lorieScreen.createScreenResources)
+        ret = lorieScreen.createScreenResources(pScreen);
+    if (!ret)
+        return FALSE;
+
+    if (!lorieCreateRootDamage(pScreen))
+        lorieLog("Failed to initialize root damage tracking\n");
+
+    return TRUE;
+}
+
 void
 lorieConfigureNotify(int width, int height, int framerate,
                      size_t nameSize, const char *name)
@@ -1329,9 +1347,6 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
     if (!ret)
         return FALSE;
 
-    if (!lorieCreateRootDamage(pScreen))
-        lorieLog("Failed to initialize root damage tracking\n");
-
 #ifdef DRI3
     if (Dri3) {
         lorieScreen.destroyPixmap = pScreen->DestroyPixmap;
@@ -1371,6 +1386,9 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
             return FALSE;
         blockHandlersRegistered = TRUE;
     }
+
+    lorieScreen.createScreenResources = pScreen->CreateScreenResources;
+    pScreen->CreateScreenResources = lorieCreateScreenResources;
 
     lorieScreen.closeScreen = pScreen->CloseScreen;
     pScreen->CloseScreen = lorieCloseScreen;
