@@ -365,6 +365,10 @@ lorieInputNotify(int fd, int ready, void *data)
                                     event.key.key);
             break;
         case EVENT_SCREEN_SIZE:
+            lorieConfigureNotify(event.screenSize.width,
+                                  event.screenSize.height,
+                                  event.screenSize.framerate,
+                                  0, NULL);
             drainBytes(fd, event.screenSize.name_size);
             break;
         case EVENT_CLIPBOARD_ENABLE:

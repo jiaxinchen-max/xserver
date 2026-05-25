@@ -29,6 +29,8 @@ int lorieRenderInputFd(void);
 
 int lorieInputRegisterFd(int fd);
 void lorieInputUnregister(void);
+void lorieConfigureNotify(int width, int height, int framerate,
+                          size_t nameSize, const char *name);
 
 void lorieEnableClipboardSync(Bool enable);
 void lorieInitClipboard(void);

@@ -46,6 +46,7 @@
 #include "randrstr.h"
 #include "scrnintstr.h"
 #include "servermd.h"
+#include "window.h"
 
 #include "lorie.h"
 #include "log.h"
@@ -72,6 +73,8 @@ typedef struct {
     int paddedBytesWidth;
     int framerate;
     char *fb;
+    LorieBuffer *rootBuffer;
+    Bool ownsRootBuffer;
     Pixel blackPixel;
     Pixel whitePixel;
     unsigned int lineBias;
@@ -124,11 +127,13 @@ static Bool Dri3 = TRUE;
 #ifdef PRESENT
 static void loriePerformVblanks(void);
 #endif
+static void lorieReleaseOwnedRootBuffer(void);
 
 static Bool
 lorieFlushRootBuffer(void)
 {
-    LorieBuffer *buffer = lorieRenderBuffer();
+    LorieBuffer *buffer = lorieScreen.rootBuffer ?
+        lorieScreen.rootBuffer : lorieRenderBuffer();
     const LorieBuffer_Desc *desc = LorieBuffer_description(buffer);
     PixmapPtr pixmap;
     void *fb = NULL;
@@ -914,7 +919,7 @@ lorieCloseScreen(ScreenPtr pScreen)
     pScreen->devPrivate = NULL;
 
     lorieInputUnregister();
-    LorieBuffer_unlock(lorieRenderBuffer());
+    lorieReleaseOwnedRootBuffer();
     lorieRenderDisconnect();
 
     return pScreen->CloseScreen(pScreen);
@@ -932,18 +937,122 @@ lorieRROutputValidateMode(ScreenPtr pScreen, RROutputPtr output,
         pScrPriv->maxHeight >= mode->mode.height;
 }
 
+static void
+lorieReleaseOwnedRootBuffer(void)
+{
+    if (!lorieScreen.rootBuffer)
+        return;
+
+    (void) LorieBuffer_unlock(lorieScreen.rootBuffer);
+    if (lorieScreen.ownsRootBuffer) {
+        (void) lorieRenderUnregisterBuffer(lorieScreen.rootBuffer);
+        LorieBuffer_release(lorieScreen.rootBuffer);
+    }
+
+    lorieScreen.rootBuffer = NULL;
+    lorieScreen.ownsRootBuffer = FALSE;
+    lorieScreen.fb = NULL;
+}
+
+static Bool
+lorieReplaceRootBuffer(ScreenPtr pScreen, CARD16 width, CARD16 height,
+                       CARD32 mmWidth, CARD32 mmHeight)
+{
+    LorieBuffer *oldBuffer = lorieScreen.rootBuffer ?
+        lorieScreen.rootBuffer : lorieRenderBuffer();
+    const LorieBuffer_Desc *oldDesc = LorieBuffer_description(oldBuffer);
+    LorieBuffer *newBuffer;
+    const LorieBuffer_Desc *newDesc;
+    PixmapPtr pixmap;
+    void *fb = NULL;
+    Bool oldOwned = lorieScreen.ownsRootBuffer;
+
+    if (!pScreen || width == 0 || height == 0 || !oldBuffer)
+        return FALSE;
+
+    if (width == pScreen->width && height == pScreen->height) {
+        pScreen->mmWidth = mmWidth;
+        pScreen->mmHeight = mmHeight;
+        RRScreenSizeNotify(pScreen);
+        RRTellChanged(pScreen);
+        return TRUE;
+    }
+
+    newBuffer = LorieBuffer_allocate(width, height, oldDesc->format,
+                                     oldDesc->type);
+    if (!newBuffer)
+        return FALSE;
+
+    if (LorieBuffer_lock(newBuffer, &fb) != 0 || !fb) {
+        LorieBuffer_release(newBuffer);
+        return FALSE;
+    }
+
+    if (!lorieRenderRegisterBuffer(newBuffer)) {
+        (void) LorieBuffer_unlock(newBuffer);
+        LorieBuffer_release(newBuffer);
+        return FALSE;
+    }
+
+    newDesc = LorieBuffer_description(newBuffer);
+    memset(fb, 0, newDesc->stride * newDesc->height * sizeof(uint32_t));
+
+    pixmap = pScreen->GetScreenPixmap(pScreen);
+    SetRootClip(pScreen, ROOT_CLIP_NONE);
+
+    if (pixmap && !pScreen->ModifyPixmapHeader(pixmap,
+                                               newDesc->width,
+                                               newDesc->height,
+                                               lorieScreen.depth,
+                                               lorieScreen.bitsPerPixel,
+                                               newDesc->stride *
+                                               sizeof(uint32_t),
+                                               fb)) {
+        SetRootClip(pScreen, ROOT_CLIP_FULL);
+        (void) lorieRenderUnregisterBuffer(newBuffer);
+        (void) LorieBuffer_unlock(newBuffer);
+        LorieBuffer_release(newBuffer);
+        return FALSE;
+    }
+
+    lorieScreen.rootBuffer = newBuffer;
+    lorieScreen.ownsRootBuffer = TRUE;
+    lorieScreen.fb = fb;
+    lorieScreen.width = newDesc->width;
+    lorieScreen.height = newDesc->height;
+    lorieScreen.paddedWidth = newDesc->stride;
+    lorieScreen.paddedBytesWidth = newDesc->stride * sizeof(uint32_t);
+
+    pScreen->width = newDesc->width;
+    pScreen->height = newDesc->height;
+    pScreen->mmWidth = mmWidth;
+    pScreen->mmHeight = mmHeight;
+
+    if (pScreen->root)
+        pScreen->ResizeWindow(pScreen->root, 0, 0, width, height, NULL);
+
+    (void) lorieRenderUseBuffer(newBuffer);
+
+    if (oldBuffer) {
+        (void) LorieBuffer_unlock(oldBuffer);
+        if (oldOwned) {
+            (void) lorieRenderUnregisterBuffer(oldBuffer);
+            LorieBuffer_release(oldBuffer);
+        }
+    }
+
+    SetRootClip(pScreen, ROOT_CLIP_FULL);
+    RRScreenSizeNotify(pScreen);
+    RRTellChanged(pScreen);
+    update_desktop_dimensions();
+    return TRUE;
+}
+
 static Bool
 lorieRRScreenSetSize(ScreenPtr pScreen, CARD16 width, CARD16 height,
                      CARD32 mmWidth, CARD32 mmHeight)
 {
-    if (width != pScreen->width || height != pScreen->height)
-        return FALSE;
-
-    pScreen->mmWidth = mmWidth;
-    pScreen->mmHeight = mmHeight;
-    RRScreenSizeNotify(pScreen);
-    RRTellChanged(pScreen);
-    return TRUE;
+    return lorieReplaceRootBuffer(pScreen, width, height, mmWidth, mmHeight);
 }
 
 static Bool
@@ -989,8 +1098,7 @@ lorieRandRInit(ScreenPtr pScreen)
     pScrPriv->rrOutputValidateMode = lorieRROutputValidateMode;
     pScrPriv->rrModeDestroy = NULL;
 
-    RRScreenSetSizeRange(pScreen, pScreen->width, pScreen->height,
-                         pScreen->width, pScreen->height);
+    RRScreenSetSizeRange(pScreen, 1, 1, 32767, 32767);
 
     snprintf(name, sizeof(name), "%dx%d", pScreen->width, pScreen->height);
     memset(&modeInfo, 0, sizeof(modeInfo));
@@ -1025,6 +1133,66 @@ lorieRandRInit(ScreenPtr pScreen)
     return TRUE;
 }
 
+void
+lorieConfigureNotify(int width, int height, int framerate,
+                     size_t nameSize, const char *name)
+{
+#if RANDR_12_INTERFACE
+    ScreenPtr pScreen = lorieScreen.screen;
+    RROutputPtr output;
+    RRCrtcPtr crtc;
+    RRModePtr mode;
+    xRRModeInfo modeInfo;
+    CARD32 mmWidth, mmHeight;
+    char modeName[64];
+
+    (void) nameSize;
+    (void) name;
+
+    if (!pScreen || width <= 0 || height <= 0)
+        return;
+
+    if (framerate <= 0)
+        framerate = lorieScreen.framerate > 0 ?
+            lorieScreen.framerate : LORIE_DEFAULT_FRAMERATE;
+
+    lorieLog("configure screen %dx%d@%d\n", width, height, framerate);
+
+    snprintf(modeName, sizeof(modeName), "%dx%d", width, height);
+    memset(&modeInfo, 0, sizeof(modeInfo));
+    modeInfo.width = width;
+    modeInfo.height = height;
+    modeInfo.nameLength = strlen(modeName);
+
+    mode = RRModeGet(&modeInfo, modeName);
+    output = RRFirstOutput(pScreen);
+    crtc = RRFirstEnabledCrtc(pScreen);
+    if (!mode || !output || !crtc)
+        return;
+
+    mmWidth = ((double) width) * 25.4 / monitorResolution;
+    mmHeight = ((double) height) * 25.4 / monitorResolution;
+
+    if (!RROutputSetModes(output, &mode, 1, 0))
+        return;
+    if (!RRCrtcNotify(crtc, mode, 0, 0, RR_Rotate_0, NULL, 1, &output))
+        return;
+    if (!RRScreenSizeSet(pScreen, width, height, mmWidth, mmHeight))
+        return;
+
+    lorieScreen.framerate = framerate;
+#ifdef PRESENT
+    lorieScreen.vblankInterval = 1000000 / framerate;
+#endif
+#else
+    (void) width;
+    (void) height;
+    (void) framerate;
+    (void) nameSize;
+    (void) name;
+#endif
+}
+
 static Bool
 lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
 {
@@ -1057,12 +1225,15 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
                             lorieScreen.framerate))
         return FALSE;
 
-    if (LorieBuffer_lock(lorieRenderBuffer(), &fb) != 0 || !fb) {
+    lorieScreen.rootBuffer = lorieRenderBuffer();
+    lorieScreen.ownsRootBuffer = FALSE;
+
+    if (LorieBuffer_lock(lorieScreen.rootBuffer, &fb) != 0 || !fb) {
         ErrorF("Failed to lock Xlorie framebuffer\n");
         return FALSE;
     }
 
-    desc = LorieBuffer_description(lorieRenderBuffer());
+    desc = LorieBuffer_description(lorieScreen.rootBuffer);
     lorieScreen.fb = fb;
     lorieScreen.screen = pScreen;
     lorieScreen.width = desc->width;
