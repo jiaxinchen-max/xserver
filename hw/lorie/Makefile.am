@@ -3,6 +3,7 @@ bin_SCRIPTS = xlorie-startxfce4
 
 AM_CFLAGS = -DHAVE_DIX_CONFIG_H \
 	    -I$(top_srcdir)/hw/lorie \
+	    -I$(top_srcdir)/dri3 \
 	    $(DIX_CFLAGS)
 
 SRCS =	InitInput.c \
