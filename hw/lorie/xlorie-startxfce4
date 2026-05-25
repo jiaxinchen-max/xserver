@@ -35,6 +35,7 @@ if [ ! -S "$RENDER_SOCKET" ]; then
 fi
 
 "$XLORIE_BIN" "$DISPLAY_NAME" \
+    -noreset \
     -screen 0 "$SCREEN_SIZE" \
     -framerate "$FRAMERATE" \
     -render-socket "$RENDER_SOCKET" \
