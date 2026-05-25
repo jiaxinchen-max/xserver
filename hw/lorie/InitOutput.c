@@ -24,6 +24,7 @@
 #include "colormapst.h"
 #include "cursor.h"
 #include "cursorstr.h"
+#include "damage.h"
 #include "dix.h"
 #ifdef DRI3
 #include "dri3.h"
@@ -75,6 +76,7 @@ typedef struct {
     char *fb;
     LorieBuffer *rootBuffer;
     Bool ownsRootBuffer;
+    DamagePtr damage;
     Pixel blackPixel;
     Pixel whitePixel;
     unsigned int lineBias;
@@ -128,6 +130,8 @@ static Bool Dri3 = TRUE;
 static void loriePerformVblanks(void);
 #endif
 static void lorieReleaseOwnedRootBuffer(void);
+static Bool lorieCreateRootDamage(ScreenPtr pScreen);
+static void lorieDestroyRootDamage(void);
 
 static Bool
 lorieFlushRootBuffer(void)
@@ -169,6 +173,22 @@ lorieFlushRootBuffer(void)
                                                   lorieScreen.bitsPerPixel,
                                                   lorieScreen.paddedBytesWidth,
                                                   lorieScreen.fb);
+}
+
+static Bool
+lorieRootDamaged(void)
+{
+    if (!lorieScreen.damage)
+        return TRUE;
+
+    return RegionNotEmpty(DamageRegion(lorieScreen.damage));
+}
+
+static void
+lorieMarkRootClean(void)
+{
+    if (lorieScreen.damage)
+        DamageEmpty(lorieScreen.damage);
 }
 
 static void
@@ -346,12 +366,21 @@ ddxProcessArgument(int argc, char *argv[], int i)
 static void
 lorieBlockHandler(void *blockData, void *timeout)
 {
+    struct lorie_shared_server_state *state = lorieRenderState();
+
 #ifdef PRESENT
     loriePerformVblanks();
 #endif
-    if (!lorieFlushRootBuffer())
-        lorieLog("Failed to flush Xlorie root AHardwareBuffer\n");
-    lorieRenderSignalFrame();
+    if (lorieRootDamaged()) {
+        if (!lorieFlushRootBuffer())
+            lorieLog("Failed to flush Xlorie root AHardwareBuffer\n");
+        lorieMarkRootClean();
+        lorieRenderSignalFrame();
+    } else if (state && (state->drawRequested || state->cursor.moved ||
+                         state->cursor.updated)) {
+        state->waitForNextFrame = 0;
+        pthread_cond_signal(&state->cond);
+    }
 }
 
 static void
@@ -685,9 +714,12 @@ loriePresentFlip(RRCrtcPtr crtc, uint64_t eventId, uint64_t targetMsc,
 static void
 loriePresentUnflip(ScreenPtr screen, uint64_t eventId)
 {
+    LorieBuffer *buffer = lorieScreen.rootBuffer ?
+        lorieScreen.rootBuffer : lorieRenderBuffer();
+
     (void) screen;
 
-    (void) lorieRenderUseBuffer(lorieRenderBuffer());
+    (void) lorieRenderUseBuffer(buffer);
     present_event_notify(eventId, 0, 0);
 }
 
@@ -914,6 +946,8 @@ lorieCloseScreen(ScreenPtr pScreen)
     }
 #endif
 
+    lorieDestroyRootDamage();
+
     if (pScreen->devPrivate)
         (*pScreen->DestroyPixmap) (pScreen->devPrivate);
     pScreen->devPrivate = NULL;
@@ -952,6 +986,39 @@ lorieReleaseOwnedRootBuffer(void)
     lorieScreen.rootBuffer = NULL;
     lorieScreen.ownsRootBuffer = FALSE;
     lorieScreen.fb = NULL;
+}
+
+static void
+lorieDestroyRootDamage(void)
+{
+    if (!lorieScreen.damage)
+        return;
+
+    DamageUnregister(lorieScreen.damage);
+    DamageDestroy(lorieScreen.damage);
+    lorieScreen.damage = NULL;
+}
+
+static Bool
+lorieCreateRootDamage(ScreenPtr pScreen)
+{
+    PixmapPtr pixmap;
+
+    lorieDestroyRootDamage();
+    if (!pScreen)
+        return FALSE;
+
+    pixmap = pScreen->GetScreenPixmap(pScreen);
+    if (!pixmap)
+        return FALSE;
+
+    lorieScreen.damage = DamageCreate(NULL, NULL, DamageReportNone,
+                                      TRUE, pScreen, NULL);
+    if (!lorieScreen.damage)
+        return FALSE;
+
+    DamageRegister(&pixmap->drawable, lorieScreen.damage);
+    return TRUE;
 }
 
 static Bool
@@ -1027,6 +1094,9 @@ lorieReplaceRootBuffer(ScreenPtr pScreen, CARD16 width, CARD16 height,
     pScreen->height = newDesc->height;
     pScreen->mmWidth = mmWidth;
     pScreen->mmHeight = mmHeight;
+
+    if (!lorieCreateRootDamage(pScreen))
+        lorieLog("Failed to recreate root damage tracking\n");
 
     if (pScreen->root)
         pScreen->ResizeWindow(pScreen->root, 0, 0, width, height, NULL);
@@ -1258,6 +1328,9 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
                        lorieScreen.paddedWidth, lorieScreen.bitsPerPixel);
     if (!ret)
         return FALSE;
+
+    if (!lorieCreateRootDamage(pScreen))
+        lorieLog("Failed to initialize root damage tracking\n");
 
 #ifdef DRI3
     if (Dri3) {
