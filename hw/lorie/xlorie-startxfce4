@@ -46,12 +46,43 @@ die() {
 command -v "$XLORIE_BIN" >/dev/null 2>&1 || die "$XLORIE_BIN not found"
 mkdir -p "$LOG_DIR" || die "failed to create log dir: $LOG_DIR"
 
+refresh_gdk_pixbuf_loaders() {
+    [ "${XLORIE_REFRESH_GDK_PIXBUF_LOADERS:-0}" = "1" ] || return 0
+
+    if command -v gdk-pixbuf-query-loaders >/dev/null 2>&1; then
+        gdk-pixbuf-query-loaders --update-cache >/dev/null 2>&1 ||
+            echo "failed to update gdk-pixbuf loader cache" >&2
+    else
+        echo "gdk-pixbuf-query-loaders not found" >&2
+    fi
+}
+
+ensure_xkb_compat_link() {
+    src="$TERMUX_PREFIX/share/xkeyboard-config-2"
+    dst="$TERMUX_PREFIX/share/X11/xkb"
+
+    [ -d "$src" ] || return 0
+
+    if [ -d "$dst" ] && [ ! -L "$dst" ] && [ -z "$(ls -A "$dst" 2>/dev/null)" ]; then
+        rmdir "$dst" 2>/dev/null || true
+    fi
+
+    if [ -L "$dst" ] && [ ! -e "$dst/rules/evdev" ]; then
+        rm -f "$dst" 2>/dev/null || true
+    fi
+
+    if [ ! -e "$dst" ]; then
+        mkdir -p "$(dirname "$dst")" || return 0
+        ln -s "$src" "$dst" 2>/dev/null || true
+    fi
+}
+
 find_xkb_dir() {
     for dir in \
         "${XLORIE_XKBDIR:-}" \
         "${XKB_CONFIG_ROOT:-}" \
-        "$TERMUX_PREFIX/share/xkeyboard-config-2" \
         "$TERMUX_PREFIX/share/X11/xkb" \
+        "$TERMUX_PREFIX/share/xkeyboard-config-2" \
         "/usr/share/xkeyboard-config-2" \
         "/usr/share/X11/xkb"; do
         [ -n "$dir" ] || continue
@@ -62,6 +93,9 @@ find_xkb_dir() {
     done
     return 1
 }
+
+refresh_gdk_pixbuf_loaders
+ensure_xkb_compat_link
 
 i=0
 while [ ! -S "$RENDER_SOCKET" ] && [ "$i" -lt "$WAIT_RENDER" ]; do
