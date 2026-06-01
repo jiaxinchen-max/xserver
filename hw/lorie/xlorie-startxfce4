@@ -8,11 +8,28 @@ if [ "${XLORIE_NO_SETSID:-0}" != "1" ] &&
     XLORIE_STARTED_IN_SESSION=1 exec setsid "$0" "$@"
 fi
 
-DISPLAY_NAME="${XLORIE_DISPLAY:-:1}"
+display_arg="${1:-${XLORIE_DISPLAY:-:1}}"
+if [ "$#" -gt 0 ]; then
+    shift
+fi
+
+case "$display_arg" in
+    :*) DISPLAY_NAME="$display_arg" ;;
+    *[!0-9]*|"") DISPLAY_NAME=":$display_arg" ;;
+    *)
+        if [ "$display_arg" -ge 6000 ]; then
+            DISPLAY_NAME=":$((display_arg - 6000))"
+        else
+            DISPLAY_NAME=":$display_arg"
+        fi
+        ;;
+esac
+
 SCREEN_SIZE="${XLORIE_SCREEN:-1280x720x24}"
 FRAMERATE="${XLORIE_FRAMERATE:-60}"
 RENDER_SOCKET="/data/data/com.termux/files/home/tmp/termux-render"
 XLORIE_BIN="${XLORIE_BIN:-Xlorie}"
+TERMUX_PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 WAIT_RENDER="${XLORIE_WAIT_RENDER:-30}"
 WAIT_X="${XLORIE_WAIT_X:-20}"
 LOG_DIR="${XLORIE_LOG_DIR:-${TMPDIR:-/tmp}}"
@@ -29,6 +46,23 @@ die() {
 command -v "$XLORIE_BIN" >/dev/null 2>&1 || die "$XLORIE_BIN not found"
 mkdir -p "$LOG_DIR" || die "failed to create log dir: $LOG_DIR"
 
+find_xkb_dir() {
+    for dir in \
+        "${XLORIE_XKBDIR:-}" \
+        "${XKB_CONFIG_ROOT:-}" \
+        "$TERMUX_PREFIX/share/xkeyboard-config-2" \
+        "$TERMUX_PREFIX/share/X11/xkb" \
+        "/usr/share/xkeyboard-config-2" \
+        "/usr/share/X11/xkb"; do
+        [ -n "$dir" ] || continue
+        [ -f "$dir/rules/evdev" ] && {
+            printf '%s\n' "$dir"
+            return 0
+        }
+    done
+    return 1
+}
+
 i=0
 while [ ! -S "$RENDER_SOCKET" ] && [ "$i" -lt "$WAIT_RENDER" ]; do
     echo "waiting for termux-render socket: $RENDER_SOCKET ($i/$WAIT_RENDER)"
@@ -40,12 +74,22 @@ if [ ! -S "$RENDER_SOCKET" ]; then
     echo "termux-render socket not found, starting Xlorie anyway: $RENDER_SOCKET" >&2
 fi
 
-"$XLORIE_BIN" "$DISPLAY_NAME" \
+set -- "$DISPLAY_NAME" \
     -noreset \
     -screen 0 "$SCREEN_SIZE" \
     -framerate "$FRAMERATE" \
     -render-socket "$RENDER_SOCKET" \
-    >"$LOG_FILE" 2>&1 &
+    "$@"
+
+xkb_dir="$(find_xkb_dir || true)"
+if [ -n "$xkb_dir" ]; then
+    export XKB_CONFIG_ROOT="$xkb_dir"
+    set -- "$@" -xkbdir "$xkb_dir"
+else
+    echo "xkeyboard-config rules/evdev not found" >&2
+fi
+
+"$XLORIE_BIN" "$@" >"$LOG_FILE" 2>&1 &
 xlorie_pid=$!
 
 cleanup() {
