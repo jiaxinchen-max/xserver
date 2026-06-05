@@ -12,6 +12,7 @@
 #include <X11/X.h>
 #include <X11/Xos.h>
 #include <X11/Xproto.h>
+#include <X11/keysym.h>
 
 #include "dix.h"
 #include "exevents.h"
@@ -29,8 +30,11 @@
 
 static DeviceIntPtr lorieMouse;
 static DeviceIntPtr lorieTouch;
-static DeviceIntPtr lorieKeyboard;
+DeviceIntPtr lorieKeyboard;
 static int registeredInputFd = -1;
+
+extern int ucs2keysym(long ucs);
+void lorieKeysymKeyboardEvent(KeySym keysym, int down);
 
 void
 ProcessInputEvents(void)
@@ -363,6 +367,16 @@ lorieInputNotify(int fd, int ready, void *data)
                 QueueKeyboardEvents(lorieKeyboard,
                                     event.key.state ? KeyPress : KeyRelease,
                                     event.key.key);
+            break;
+        case EVENT_UNICODE:
+            if (lorieKeyboard) {
+                int keysym = ucs2keysym((long) event.unicode.code);
+
+                if (keysym != -1) {
+                    lorieKeysymKeyboardEvent((KeySym) keysym, TRUE);
+                    lorieKeysymKeyboardEvent((KeySym) keysym, FALSE);
+                }
+            }
             break;
         case EVENT_SCREEN_SIZE:
             lorieConfigureNotify(event.screenSize.width,

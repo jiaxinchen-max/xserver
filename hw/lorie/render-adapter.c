@@ -72,6 +72,7 @@ lorieRenderConnect(int width, int height, int framerate)
 
     setScreenConfig(width, height, framerate, XLORIE_RENDER_BUFFER_FORMAT,
                     XLORIE_RENDER_BUFFER_TYPE);
+    setKeycodeFormat(LORIE_KEYCODE_XKB);
     if (connectToRender() != 0) {
         lorieLog("connectToRender failed: %s\n", strerror(errno));
         return false;

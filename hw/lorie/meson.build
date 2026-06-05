@@ -4,10 +4,12 @@ endif
 
 lorie_srcs = [
     'InitInput.c',
+    'InputXKB.c',
     'InitOutput.c',
     'clipboard.c',
     'render-adapter.c',
     'log.c',
+    '../xquartz/keysym2ucs.c',
     '../../mi/miinitext.c',
     '../../mi/miinitext.h',
 ]

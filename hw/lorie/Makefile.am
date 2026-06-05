@@ -7,12 +7,15 @@ AM_CFLAGS = -DHAVE_DIX_CONFIG_H \
 	    $(DIX_CFLAGS)
 
 SRCS =	InitInput.c \
+	InputXKB.c \
 	InitOutput.c \
 	clipboard.c \
 	render-adapter.c \
 	log.c \
 	log.h \
 	lorie.h \
+	$(top_srcdir)/hw/xquartz/keysym2ucs.c \
+	$(top_srcdir)/hw/xquartz/keysym2ucs.h \
 	$(top_srcdir)/mi/miinitext.c \
 	$(top_srcdir)/mi/miinitext.h
 
