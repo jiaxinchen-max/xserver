@@ -380,7 +380,8 @@ lorieBlockHandler(void *blockData, void *timeout)
     } else if (state && (state->drawRequested || state->cursor.moved ||
                          state->cursor.updated)) {
         state->waitForNextFrame = 0;
-        pthread_cond_signal(&state->cond);
+        if (rendererCond)
+            pthread_cond_signal(rendererCond);
     }
 }
 
@@ -427,7 +428,8 @@ lorieMoveCursor(DeviceIntPtr pDev, ScreenPtr pScreen, int x, int y)
     state->cursor.x = x;
     state->cursor.y = y;
     state->cursor.moved = TRUE;
-    pthread_cond_signal(&state->cond);
+    if (rendererCond)
+        pthread_cond_signal(rendererCond);
 }
 
 static void

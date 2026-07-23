@@ -122,7 +122,8 @@ lorieRenderSignalFrame(void)
     state->rootWindowTextureID = activeRootBufferId;
     state->waitForNextFrame = 0;
     state->drawRequested = 1;
-    pthread_cond_signal(&state->cond);
+    if (rendererCond)
+        pthread_cond_signal(rendererCond);
     return true;
 }
 
