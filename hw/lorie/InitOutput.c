@@ -10,6 +10,7 @@
 #endif
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -660,8 +661,9 @@ loriePerformVblanks(void)
 
 static Bool
 loriePresentCheckFlip(RRCrtcPtr crtc, WindowPtr window, PixmapPtr pixmap,
-                      Bool syncFlip)
+                       Bool syncFlip)
 {
+    lorieLog("Xlorie: present check_flip enter\n");
 #ifdef DRI3
     loriePixmapPriv *priv;
 
@@ -690,6 +692,7 @@ static Bool
 loriePresentFlip(RRCrtcPtr crtc, uint64_t eventId, uint64_t targetMsc,
                  PixmapPtr pixmap, Bool syncFlip)
 {
+    lorieLog("Xlorie: present flip enter\n");
 #ifdef DRI3
     loriePixmapPriv *priv;
     lorieVblankRec *event;
@@ -819,6 +822,7 @@ static PixmapPtr
 lorieDri3GlamorPixmap(ScreenPtr screen, int fd, CARD16 width, CARD16 height,
                       CARD32 stride, CARD32 offset, CARD8 depth)
 {
+    lorieLog("Xlorie: DRI3 glamor import enter fd=%d %dx%d\n", fd, width, height);
     loriePixmapPriv *priv;
     LorieBuffer *buffer = NULL;
     EGLImageKHR image = EGL_NO_IMAGE_KHR;
@@ -856,7 +860,10 @@ lorieDri3GlamorPixmap(ScreenPtr screen, int fd, CARD16 width, CARD16 height,
             return NullPixmap;
     }
 
+    lorieLog("Xlorie: DRI3 glamor importing buffer type=%d\n",
+             LorieBuffer_description(buffer)->type);
     texture = lorieGlamorImportTexture(buffer, &image);
+    lorieLog("Xlorie: DRI3 glamor import done tex=%u\n", texture);
     if (!texture) {
         LorieBuffer_release(buffer);
         return NullPixmap;
@@ -998,6 +1005,7 @@ lorieDri3FdsFromPixmap(ScreenPtr screen, PixmapPtr pixmap, int *fds,
                        uint32_t *strides, uint32_t *offsets,
                        uint64_t *modifier)
 {
+    lorieLog("Xlorie: DRI3 fds_from_pixmap enter\n");
     (void) screen;
 
 #ifdef LORIE_HAVE_GLAMOR
@@ -1026,6 +1034,37 @@ lorieDri3FdsFromPixmap(ScreenPtr screen, PixmapPtr pixmap, int *fds,
     (void) modifier;
     return 0;
 }
+
+#ifdef LORIE_HAVE_GLAMOR
+/*
+ * DRI3 open: Mesa's DRI3 loader (glibc container clients) needs a device fd
+ * to proceed. Adreno/KGSL has no DRM render node, so hand it the KGSL device
+ * instead; Mesa's zink path only uses the fd to anchor buffer imports.
+ */
+static int
+lorieDri3Open(ScreenPtr screen, RRProviderPtr provider, int *fd)
+{
+    (void) screen;
+    (void) provider;
+
+    *fd = open("/dev/kgsl-3d0", O_RDWR | O_CLOEXEC);
+    if (*fd < 0) {
+        lorieLog("Xlorie: DRI3 open /dev/kgsl-3d0 failed: %s\n",
+                 strerror(errno));
+        return BadAlloc;
+    }
+    lorieLog("Xlorie: DRI3 open -> kgsl fd %d\n", *fd);
+    return Success;
+}
+
+static int
+lorieDri3OpenClient(ClientPtr client, ScreenPtr screen, RRProviderPtr provider,
+                    int *fd)
+{
+    (void) client;
+    return lorieDri3Open(screen, provider, fd);
+}
+#endif
 
 static int
 lorieDri3GetFormats(ScreenPtr screen, CARD32 *numFormats, CARD32 **formats)
@@ -1089,6 +1128,10 @@ lorieDri3GetDrawableModifiers(DrawablePtr drawable, uint32_t format,
 
 static dri3_screen_info_rec lorieDri3Info = {
     .version = 2,
+#ifdef LORIE_HAVE_GLAMOR
+    .open = lorieDri3Open,
+    .open_client = lorieDri3OpenClient,
+#endif
     .pixmap_from_fds = lorieDri3PixmapFromFds,
     .fd_from_pixmap = lorieDri3FdFromPixmap,
     .fds_from_pixmap = lorieDri3FdsFromPixmap,
@@ -1161,7 +1204,13 @@ lorieCloseScreen(ScreenPtr pScreen)
 #endif
         lorieInputUnregister();
         lorieReleaseOwnedRootBuffer();
-        lorieRenderDisconnect();
+        /* Do NOT lorieRenderDisconnect() here: the X server resets itself when
+         * the last client disconnects (dix CloseDownClient -> DE_RESET), and
+         * the termux-render server is single-client -- it will not accept a
+         * second connection. Keeping the render link alive across the reset
+         * lets the re-initialized screen reuse the same shared root buffer
+         * (lorieRenderConnect early-returns while connected). The socket is
+         * cleaned up implicitly when the process actually exits. */
         return ret;
     }
 }

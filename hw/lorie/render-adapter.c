@@ -162,6 +162,7 @@ lorieRenderSendEvent(const lorieEvent *event, const void *payload,
 bool
 lorieRenderRegisterBuffer(LorieBuffer *buffer)
 {
+    lorieLog("Xlorie: render register enter\n");
     if (!buffer)
         return false;
 
