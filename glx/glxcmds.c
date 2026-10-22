@@ -915,8 +915,13 @@ __glXDisp_GetVisualConfigs(__GLXclientState * cl, GLbyte * pc)
     __GLX_DECLARE_SWAP_VARIABLES;
     __GLX_DECLARE_SWAP_ARRAY_VARIABLES;
 
-    if (!validGlxScreen(cl->client, req->screen, &pGlxScreen, &err))
+    if (!validGlxScreen(cl->client, req->screen, &pGlxScreen, &err)) {
+        ErrorF("GLXDBG: GetVisualConfigs validGlxScreen failed err=%d\n", err);
         return err;
+    }
+
+    ErrorF("GLXDBG: GetVisualConfigs screen=%p numVisuals=%d\n",
+           (void *) pGlxScreen, pGlxScreen->numVisuals);
 
     reply = (xGLXGetVisualConfigsReply) {
         .type = X_Reply,
@@ -963,6 +968,10 @@ __glXDisp_GetVisualConfigs(__GLXclientState * cl, GLbyte * pc)
         buf[p++] = modes->level;
 
         assert(p == GLX_VIS_CONFIG_UNPAIRED);
+        ErrorF("GLXDBG: visual[%d] vid=%u class=%u rgba=%u db=%u depth=%u\n",
+               i, modes->visualID, glxConvertToXVisualType(modes->visualType),
+               (modes->renderType & GLX_RGBA_BIT) ? 1u : 0u,
+               modes->doubleBufferMode, (unsigned) modes->depthBits);
         /*
          ** Add token/value pairs for extensions.
          */
@@ -2437,7 +2446,10 @@ __glXDisp_QueryServerString(__GLXclientState * cl, GLbyte * pc)
 
     switch (req->name) {
     case GLX_VENDOR:
-        ptr = GLXServerVendorName;
+        /* The client-side Mesa vendor matches this name; with a glvnd vendor
+         * registered the server must present it, otherwise the client bails
+         * out of its screen init. */
+        ptr = pGlxScreen->glvnd ? pGlxScreen->glvnd : GLXServerVendorName;
         break;
     case GLX_VERSION:
         ptr = "1.4";

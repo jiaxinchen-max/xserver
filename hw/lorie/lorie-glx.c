@@ -25,6 +25,7 @@
 #include "glxdrawable.h"
 #include "glxscreens.h"
 #include "glxext.h"
+#include "extension_string.h"
 
 #include "lorie.h"
 #include "log.h"
@@ -274,6 +275,33 @@ lorieGlxScreenProbe(ScreenPtr pScreen)
     screen->fbconfigs = configs;
 
     __glXInitExtensionEnableBits(screen->glx_enable_bits);
+    /* The client-side Mesa GLX vendor requires these extensions; the DRI
+     * driver path normally reports them, but this protocol-only provider has
+     * no driver, so enable them explicitly. */
+    {
+        const char *needed[] = {
+            "GLX_ARB_create_context",
+            "GLX_ARB_create_context_profile",
+            "GLX_ARB_create_context_robustness",
+            "GLX_ARB_context_flush_control",
+            "GLX_ARB_create_context_no_error",
+            "GLX_EXT_create_context_es2_profile",
+            "GLX_EXT_no_config_context",
+            "GLX_EXT_texture_from_pixmap",
+            "GLX_ARB_framebuffer_sRGB",
+            "GLX_EXT_framebuffer_sRGB",
+            "GLX_SGI_swap_control",
+            "GLX_MESA_copy_sub_buffer",
+            "GLX_INTEL_swap_event",
+            "GLX_ARB_fbconfig_float",
+            "GLX_ARB_multisample",
+            "GLX_EXT_import_context",
+            "GLX_EXT_swap_control",
+        };
+        size_t k;
+        for (k = 0; k < sizeof(needed) / sizeof(needed[0]); k++)
+            __glXEnableExtension(screen->glx_enable_bits, needed[k]);
+    }
     /* Match the client-side Mesa vendor name. */
     screen->glvnd = strdup("mesa");
     screen->GLXextensions = strdup("GLX_ARB_create_context "
