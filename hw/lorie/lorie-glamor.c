@@ -81,6 +81,7 @@ lorieGlamorImportTexture(LorieBuffer *buffer, EGLImageKHR *outImage)
     if (desc->type == LORIEBUFFER_AHARDWAREBUFFER && desc->buffer)
         image = lorieEglImageFromAHB(desc->buffer);
 
+    lorieLog("Xlorie glamor: import: native=%d\n", image != EGL_NO_IMAGE_KHR);
     if (image == EGL_NO_IMAGE_KHR) {
         int fd = LorieBuffer_dupDmaBufFd(buffer);
 

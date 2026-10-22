@@ -208,6 +208,7 @@ __glXDRIscreenCreateContext(__GLXscreen * baseScreen,
                             const uint32_t *attribs,
                             int *error)
 {
+    ErrorF("GLX: dri screenCreateContext enter\n");
     __GLXDRIscreen *screen = (__GLXDRIscreen *) baseScreen;
     __GLXDRIcontext *context, *shareContext;
     __GLXDRIconfig *config = (__GLXDRIconfig *) glxConfig;
@@ -254,6 +255,7 @@ __glXDRIscreenCreateDrawable(ClientPtr client,
                              XID drawId,
                              int type, XID glxDrawId, __GLXconfig * glxConfig)
 {
+    ErrorF("GLX: dri screenCreateDrawable enter\n");
     __GLXDRIscreen *driScreen = (__GLXDRIscreen *) screen;
     __GLXDRIconfig *config = (__GLXDRIconfig *) glxConfig;
     __GLXDRIdrawable *private;
@@ -420,6 +422,7 @@ __glXDRIscreenDestroy(__GLXscreen * baseScreen)
 static __GLXscreen *
 __glXDRIscreenProbe(ScreenPtr pScreen)
 {
+    ErrorF("GLX: swrast screenProbe enter\n");
     const char *driverName = "swrast";
     __GLXDRIscreen *screen;
 
@@ -462,6 +465,7 @@ __glXDRIscreenProbe(ScreenPtr pScreen)
 #if !defined(XQUARTZ) && !defined(WIN32)
     screen->base.glvnd = strdup("mesa");
 #endif
+    ErrorF("GLX: swrast createNewScreen done, __glXScreenInit\n");
     __glXScreenInit(&screen->base, pScreen);
 
     __glXsetGetProcAddress(glXGetProcAddressARB);
