@@ -477,11 +477,12 @@ void GlxDispatchReset(void)
 
 int GlxDispatchRequest(ClientPtr client)
 {
+    REQUEST(xReq);
     {
         CARD8 minor = ((CARD8 *) client->requestBuffer)[0];
-        ErrorF("GLXDBG: dispatch minor=%u\n", (unsigned) minor);
+        ErrorF("GLXDBG: dispatch major=%u minor=%u\n",
+               (unsigned) minor, (unsigned) stuff->data);
     }
-    REQUEST(xReq);
     int result;
 
     if (GlxExtensionEntry->base == 0)
