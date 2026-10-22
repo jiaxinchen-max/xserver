@@ -52,6 +52,15 @@
 #include "lorie.h"
 #include "log.h"
 
+#ifdef LORIE_HAVE_GLAMOR
+#include <sys/stat.h>
+#include <epoxy/egl.h>
+#include <epoxy/gl.h>
+#include "glamor.h"
+#include "lorie-egl.h"
+#include "lorie-glamor.h"
+#endif
+
 #define LORIE_DEFAULT_WIDTH 1280
 #define LORIE_DEFAULT_HEIGHT 720
 #define LORIE_DEFAULT_DEPTH 24
@@ -105,6 +114,11 @@ typedef struct {
     LorieBuffer *buffer;
     void *locked;
     Bool registered;
+#ifdef LORIE_HAVE_GLAMOR
+    EGLImageKHR image;
+    GLuint texture;
+    Bool glamor;
+#endif
 } loriePixmapPriv;
 
 static DevPrivateKeyRec loriePixmapPrivateKey;
@@ -126,6 +140,14 @@ static Bool blockHandlersRegistered = FALSE;
 #ifdef DRI3
 static Bool Dri3 = TRUE;
 #endif
+#ifdef LORIE_HAVE_GLAMOR
+static Bool Glamor = TRUE;
+static Bool glamorActive = FALSE;
+static Bool lorieFbIsScratch = FALSE;
+static enum lorie_gl_mode lorieGlMode = LORIE_GL_FALLBACK;
+static EGLImageKHR lorieRootImage = EGL_NO_IMAGE_KHR;
+static GLuint lorieRootTexture = 0;
+#endif
 
 #ifdef PRESENT
 static void loriePerformVblanks(void);
@@ -143,6 +165,16 @@ lorieFlushRootBuffer(void)
     PixmapPtr pixmap;
     void *fb = NULL;
     int ret;
+
+#ifdef LORIE_HAVE_GLAMOR
+    if (glamorActive) {
+        /* X rendered on the GPU straight into the shared AHB; just make sure
+         * the GPU is done before the termux-render consumer samples it. */
+        if (lorieScreen.screen)
+            lorieGlamorFinishFrame(lorieScreen.screen);
+        return TRUE;
+    }
+#endif
 
     if (!buffer || desc->type != LORIEBUFFER_AHARDWAREBUFFER)
         return TRUE;
@@ -751,19 +783,97 @@ lorieDestroyPixmap(PixmapPtr pixmap)
 {
     loriePixmapPriv *priv = loriePixmapPrivate(pixmap);
 
-    if (pixmap->refcnt == 1 && priv && priv->buffer) {
-        if (priv->registered)
-            (void) lorieRenderUnregisterBuffer(priv->buffer);
-        if (priv->locked)
-            (void) LorieBuffer_unlock(priv->buffer);
-        LorieBuffer_release(priv->buffer);
-        priv->buffer = NULL;
-        priv->locked = NULL;
-        priv->registered = FALSE;
+    if (pixmap->refcnt == 1 && priv) {
+#ifdef LORIE_HAVE_GLAMOR
+        if (priv->image != EGL_NO_IMAGE_KHR) {
+            lorieEglDestroyImage(priv->image);
+            priv->image = EGL_NO_IMAGE_KHR;
+        }
+        priv->texture = 0;   /* owned by the glamor pixmap */
+        priv->glamor = FALSE;
+#endif
+        if (priv->buffer) {
+            if (priv->registered)
+                (void) lorieRenderUnregisterBuffer(priv->buffer);
+            if (priv->locked)
+                (void) LorieBuffer_unlock(priv->buffer);
+            LorieBuffer_release(priv->buffer);
+            priv->buffer = NULL;
+            priv->locked = NULL;
+            priv->registered = FALSE;
+        }
     }
 
     return lorieScreen.destroyPixmap(pixmap);
 }
+
+#ifdef LORIE_HAVE_GLAMOR
+/*
+ * Import a DRI3 client buffer as a GPU-textured glamor pixmap.
+ *
+ * The dri3 dispatch always close()s fds[i] after we return (dri3_request.c), so
+ * we must not keep the raw fd: LorieBuffer_wrapFileDescriptor dups/maps it, and
+ * the socket recv consumes the handle out of the fd. We never close fd here.
+ */
+static PixmapPtr
+lorieDri3GlamorPixmap(ScreenPtr screen, int fd, CARD16 width, CARD16 height,
+                      CARD32 stride, CARD32 offset, CARD8 depth)
+{
+    loriePixmapPriv *priv;
+    LorieBuffer *buffer = NULL;
+    EGLImageKHR image = EGL_NO_IMAGE_KHR;
+    GLuint texture;
+    PixmapPtr pixmap;
+    struct stat st;
+
+    if (fstat(fd, &st) != 0)
+        return NullPixmap;
+
+    if (S_ISSOCK(st.st_mode)) {
+        /* gl4es / Termux private DRI3 ABI: AHB handle over a unix socket. */
+        LorieBuffer_recvHandleFromUnixSocket(fd, &buffer);
+        if (!buffer)
+            return NullPixmap;
+    } else {
+        /* Mesa/zink client: a dma-buf fd. Wrap it so Present can register it. */
+        buffer = LorieBuffer_wrapFileDescriptor(width, stride / sizeof(uint32_t),
+                                                height,
+                                                AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM,
+                                                fd, offset);
+        if (!buffer)
+            return NullPixmap;
+    }
+
+    texture = lorieGlamorImportTexture(buffer, &image);
+    if (!texture) {
+        LorieBuffer_release(buffer);
+        return NullPixmap;
+    }
+
+    pixmap = lorieGlamorCreateTexturedPixmap(screen, width, height, depth,
+                                             texture);
+    if (!pixmap) {
+        lorieEglDestroyImage(image);
+        LorieBuffer_release(buffer);
+        return NullPixmap;
+    }
+
+    priv = loriePixmapPrivate(pixmap);
+    if (!priv) {
+        screen->DestroyPixmap(pixmap);
+        lorieEglDestroyImage(image);
+        LorieBuffer_release(buffer);
+        return NullPixmap;
+    }
+    priv->buffer = buffer;
+    priv->locked = NULL;
+    priv->registered = FALSE;
+    priv->image = image;
+    priv->texture = texture;
+    priv->glamor = TRUE;
+    return pixmap;
+}
+#endif /* LORIE_HAVE_GLAMOR */
 
 static PixmapPtr
 lorieDri3PixmapFromFds(ScreenPtr screen, CARD8 numFds, const int *fds,
@@ -787,6 +897,16 @@ lorieDri3PixmapFromFds(ScreenPtr screen, CARD8 numFds, const int *fds,
 
     if (depth != 24 && depth != 32)
         return NullPixmap;
+
+#ifdef LORIE_HAVE_GLAMOR
+    if (glamorActive) {
+        PixmapPtr pixmap = lorieDri3GlamorPixmap(screen, fds[0], width, height,
+                                                 strides[0], offsets[0], depth);
+        if (!pixmap)
+            lorieLog("Xlorie: glamor DRI3 import failed\n");
+        return pixmap;
+    }
+#endif
 
     if (offsets[0] != 0 || strides[0] % sizeof(uint32_t) != 0)
         return NullPixmap;
@@ -833,8 +953,27 @@ lorieDri3FdFromPixmap(ScreenPtr screen, PixmapPtr pixmap, CARD16 *stride,
                       CARD32 *size)
 {
     (void) screen;
-    (void) pixmap;
 
+#ifdef LORIE_HAVE_GLAMOR
+    {
+        loriePixmapPriv *priv = loriePixmapPrivate(pixmap);
+
+        if (priv && priv->buffer) {
+            const LorieBuffer_Desc *desc = LorieBuffer_description(priv->buffer);
+            int fd = LorieBuffer_dupDmaBufFd(priv->buffer);
+
+            if (fd >= 0) {
+                if (stride)
+                    *stride = desc->stride * sizeof(uint32_t);
+                if (size)
+                    *size = desc->stride * sizeof(uint32_t) * desc->height;
+                return fd;
+            }
+        }
+    }
+#endif
+
+    (void) pixmap;
     if (stride)
         *stride = 0;
     if (size)
@@ -848,6 +987,26 @@ lorieDri3FdsFromPixmap(ScreenPtr screen, PixmapPtr pixmap, int *fds,
                        uint64_t *modifier)
 {
     (void) screen;
+
+#ifdef LORIE_HAVE_GLAMOR
+    if (fds && strides && offsets && modifier) {
+        loriePixmapPriv *priv = loriePixmapPrivate(pixmap);
+
+        if (priv && priv->buffer) {
+            const LorieBuffer_Desc *desc = LorieBuffer_description(priv->buffer);
+            int fd = LorieBuffer_dupDmaBufFd(priv->buffer);
+
+            if (fd >= 0) {
+                fds[0] = fd;
+                strides[0] = desc->stride * sizeof(uint32_t);
+                offsets[0] = 0;
+                *modifier = DRM_FORMAT_MOD_LINEAR;
+                return 1;
+            }
+        }
+    }
+#endif
+
     (void) pixmap;
     (void) fds;
     (void) strides;
@@ -934,6 +1093,9 @@ lorieCloseScreen(ScreenPtr pScreen)
     lorieVblankRec *vblank, *tmp;
 #endif
 
+    lorieLog("Xlorie: lorieCloseScreen called\n");
+    egl_log_backtrace();
+
     pScreen->CloseScreen = lorieScreen.closeScreen;
     pScreen->CreateScreenResources = lorieScreen.createScreenResources;
 
@@ -952,15 +1114,44 @@ lorieCloseScreen(ScreenPtr pScreen)
 
     lorieDestroyRootDamage();
 
-    if (pScreen->devPrivate)
-        (*pScreen->DestroyPixmap) (pScreen->devPrivate);
-    pScreen->devPrivate = NULL;
+#ifdef LORIE_HAVE_GLAMOR
+    if (!glamorActive)
+#endif
+    {
+        /* Software fb path: free the screen pixmap ourselves. In the glamor
+         * path, the chained CloseScreen (glamor_close_screen) destroys the
+         * screen pixmap's FBO itself and would crash if devPrivate were
+         * already NULLed. */
+        if (pScreen->devPrivate)
+            (*pScreen->DestroyPixmap) (pScreen->devPrivate);
+        pScreen->devPrivate = NULL;
+    }
 
-    lorieInputUnregister();
-    lorieReleaseOwnedRootBuffer();
-    lorieRenderDisconnect();
+    /* Run the chained CloseScreen FIRST: it destroys all pixmaps (glamor's
+     * DestroyPixmap needs the EGL context to still be alive), then tear down
+     * the GPU path. Note this runs on every server reset (the X server resets
+     * when the last client disconnects), so it doubles as the EGL recovery
+     * path after screen power transitions invalidate the display. */
+    {
+        Bool ret = pScreen->CloseScreen(pScreen);
 
-    return pScreen->CloseScreen(pScreen);
+#ifdef LORIE_HAVE_GLAMOR
+        if (glamorActive) {
+            if (lorieRootImage != EGL_NO_IMAGE_KHR) {
+                lorieEglDestroyImage(lorieRootImage);
+                lorieRootImage = EGL_NO_IMAGE_KHR;
+            }
+            lorieRootTexture = 0;
+            glamor_fini(pScreen);
+            lorieEglFini();
+            glamorActive = FALSE;
+        }
+#endif
+        lorieInputUnregister();
+        lorieReleaseOwnedRootBuffer();
+        lorieRenderDisconnect();
+        return ret;
+    }
 }
 
 static Bool
@@ -981,7 +1172,16 @@ lorieReleaseOwnedRootBuffer(void)
     if (!lorieScreen.rootBuffer)
         return;
 
-    (void) LorieBuffer_unlock(lorieScreen.rootBuffer);
+#ifdef LORIE_HAVE_GLAMOR
+    if (lorieFbIsScratch) {
+        free(lorieScreen.fb);
+        lorieFbIsScratch = FALSE;
+    } else
+#endif
+    {
+        (void) LorieBuffer_unlock(lorieScreen.rootBuffer);
+    }
+
     if (lorieScreen.ownsRootBuffer) {
         (void) lorieRenderUnregisterBuffer(lorieScreen.rootBuffer);
         LorieBuffer_release(lorieScreen.rootBuffer);
@@ -1042,6 +1242,8 @@ lorieReplaceRootBuffer(ScreenPtr pScreen, CARD16 width, CARD16 height,
         return FALSE;
 
     if (width == pScreen->width && height == pScreen->height) {
+        lorieLog("Xlorie: configure same-size %dx%d (screen %dx%d)\n",
+                 width, height, pScreen->width, pScreen->height);
         pScreen->mmWidth = mmWidth;
         pScreen->mmHeight = mmHeight;
         RRScreenSizeNotify(pScreen);
@@ -1054,19 +1256,31 @@ lorieReplaceRootBuffer(ScreenPtr pScreen, CARD16 width, CARD16 height,
     if (!newBuffer)
         return FALSE;
 
-    if (LorieBuffer_lock(newBuffer, &fb) != 0 || !fb) {
-        LorieBuffer_release(newBuffer);
-        return FALSE;
+#ifdef LORIE_HAVE_GLAMOR
+    if (!glamorActive)
+#endif
+    {
+        /* The root AHB is GPU-only; only the software fb path CPU-locks it. */
+        if (LorieBuffer_lock(newBuffer, &fb) != 0 || !fb) {
+            LorieBuffer_release(newBuffer);
+            return FALSE;
+        }
     }
 
     if (!lorieRenderRegisterBuffer(newBuffer)) {
-        (void) LorieBuffer_unlock(newBuffer);
+#ifdef LORIE_HAVE_GLAMOR
+        if (!glamorActive)
+#endif
+            (void) LorieBuffer_unlock(newBuffer);
         LorieBuffer_release(newBuffer);
         return FALSE;
     }
 
     newDesc = LorieBuffer_description(newBuffer);
-    memset(fb, 0, newDesc->stride * newDesc->height * sizeof(uint32_t));
+#ifdef LORIE_HAVE_GLAMOR
+    if (!glamorActive)
+#endif
+        memset(fb, 0, newDesc->stride * newDesc->height * sizeof(uint32_t));
 
     pixmap = pScreen->GetScreenPixmap(pScreen);
     SetRootClip(pScreen, ROOT_CLIP_NONE);
@@ -1078,17 +1292,28 @@ lorieReplaceRootBuffer(ScreenPtr pScreen, CARD16 width, CARD16 height,
                                                lorieScreen.bitsPerPixel,
                                                newDesc->stride *
                                                sizeof(uint32_t),
-                                               fb)) {
+#ifdef LORIE_HAVE_GLAMOR
+                                               glamorActive ? NULL : fb
+#else
+                                               fb
+#endif
+                                               )) {
         SetRootClip(pScreen, ROOT_CLIP_FULL);
         (void) lorieRenderUnregisterBuffer(newBuffer);
-        (void) LorieBuffer_unlock(newBuffer);
+#ifdef LORIE_HAVE_GLAMOR
+        if (!glamorActive)
+#endif
+            (void) LorieBuffer_unlock(newBuffer);
         LorieBuffer_release(newBuffer);
         return FALSE;
     }
 
     lorieScreen.rootBuffer = newBuffer;
     lorieScreen.ownsRootBuffer = TRUE;
-    lorieScreen.fb = fb;
+#ifdef LORIE_HAVE_GLAMOR
+    if (!glamorActive)
+#endif
+        lorieScreen.fb = fb;
     lorieScreen.width = newDesc->width;
     lorieScreen.height = newDesc->height;
     lorieScreen.paddedWidth = newDesc->stride;
@@ -1107,8 +1332,26 @@ lorieReplaceRootBuffer(ScreenPtr pScreen, CARD16 width, CARD16 height,
 
     (void) lorieRenderUseBuffer(newBuffer);
 
+#ifdef LORIE_HAVE_GLAMOR
+    if (glamorActive) {
+        if (lorieRootImage != EGL_NO_IMAGE_KHR) {
+            lorieEglDestroyImage(lorieRootImage);
+            lorieRootImage = EGL_NO_IMAGE_KHR;
+        }
+        lorieRootTexture = 0;
+        if (!lorieGlamorBackScreenPixmap(pScreen, newBuffer, &lorieRootImage,
+                                         &lorieRootTexture))
+            lorieLog("Xlorie: failed to GPU-back root buffer after resize\n");
+        else if (pixmap)
+            glamor_clear_pixmap(pixmap);   /* zero-fill on the GPU */
+    }
+#endif
+
     if (oldBuffer) {
-        (void) LorieBuffer_unlock(oldBuffer);
+#ifdef LORIE_HAVE_GLAMOR
+        if (!glamorActive)
+#endif
+            (void) LorieBuffer_unlock(oldBuffer);
         if (oldOwned) {
             (void) lorieRenderUnregisterBuffer(oldBuffer);
             LorieBuffer_release(oldBuffer);
@@ -1220,6 +1463,13 @@ lorieCreateScreenResources(ScreenPtr pScreen)
     if (!lorieCreateRootDamage(pScreen))
         lorieLog("Failed to initialize root damage tracking\n");
 
+#ifdef LORIE_HAVE_GLAMOR
+    if (glamorActive &&
+        !lorieGlamorBackScreenPixmap(pScreen, lorieScreen.rootBuffer,
+                                     &lorieRootImage, &lorieRootTexture))
+        lorieLog("Xlorie: failed to GPU-back the root buffer\n");
+#endif
+
     return TRUE;
 }
 
@@ -1246,7 +1496,8 @@ lorieConfigureNotify(int width, int height, int framerate,
         framerate = lorieScreen.framerate > 0 ?
             lorieScreen.framerate : LORIE_DEFAULT_FRAMERATE;
 
-    lorieLog("configure screen %dx%d@%d\n", width, height, framerate);
+    lorieLog("configure screen %dx%d@%d (current %dx%d)\n", width, height,
+             framerate, pScreen->width, pScreen->height);
 
     snprintf(modeName, sizeof(modeName), "%dx%d", width, height);
     memset(&modeInfo, 0, sizeof(modeInfo));
@@ -1318,12 +1569,35 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
     lorieScreen.rootBuffer = lorieRenderBuffer();
     lorieScreen.ownsRootBuffer = FALSE;
 
-    if (LorieBuffer_lock(lorieScreen.rootBuffer, &fb) != 0 || !fb) {
-        ErrorF("Failed to lock Xlorie framebuffer\n");
-        return FALSE;
+    desc = LorieBuffer_description(lorieScreen.rootBuffer);
+
+#ifdef LORIE_HAVE_GLAMOR
+    lorieGlMode = Glamor ? lorieEglResolveMode() : LORIE_GL_FALLBACK;
+    glamorActive = (lorieGlMode != LORIE_GL_FALLBACK) &&
+                   lorieEglInit(lorieGlMode);
+    if (!glamorActive && lorieGlMode != LORIE_GL_FALLBACK)
+        lorieLog("Xlorie: EGL init failed; using software fb path\n");
+
+    if (glamorActive) {
+        /* The termux-render root AHB is GPU-only (not CPU-lockable); glamor
+         * renders into it as a texture. fb only needs scratch storage for the
+         * fb layer's bookkeeping; the screen pixmap is GPU-backed later. */
+        fb = calloc((size_t) desc->stride * (size_t) desc->height, 4);
+        if (!fb) {
+            ErrorF("Xlorie: failed to allocate scratch framebuffer\n");
+            return FALSE;
+        }
+        lorieFbIsScratch = TRUE;
+    }
+#endif
+
+    if (!fb) {
+        if (LorieBuffer_lock(lorieScreen.rootBuffer, &fb) != 0 || !fb) {
+            ErrorF("Failed to lock Xlorie framebuffer\n");
+            return FALSE;
+        }
     }
 
-    desc = LorieBuffer_description(lorieScreen.rootBuffer);
     lorieScreen.fb = fb;
     lorieScreen.screen = pScreen;
     lorieScreen.width = desc->width;
@@ -1361,6 +1635,18 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
 
     if (Render && !fbPictureInit(pScreen, 0, 0))
         return FALSE;
+
+#ifdef LORIE_HAVE_GLAMOR
+    if (glamorActive) {
+        if (!glamor_init(pScreen, GLAMOR_USE_EGL_SCREEN)) {
+            lorieLog("Xlorie: glamor_init failed; using software fb path\n");
+            glamorActive = FALSE;
+            lorieEglFini();
+        } else {
+            lorieLog("Xlorie: glamor GPU path enabled\n");
+        }
+    }
+#endif
 
     if (!lorieRandRInit(pScreen))
         return FALSE;

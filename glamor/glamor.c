@@ -509,11 +509,19 @@ glamor_add_format(ScreenPtr screen, int depth, CARD32 render_format,
         glDeleteFramebuffers(1, &fbo);
 
         if (format != read_format || type != read_type) {
-            ErrorF("glamor: Implementation returned 0x%x/0x%x read format/type "
-                   "for depth %d, expected 0x%x/0x%x.  "
-                   "Falling back to software.\n",
-                   read_format, read_type, depth, format, type);
-            return;
+            /* Turnip/Android GLES report a non-matching read format/type for
+             * depth 24/32 BGRA; tolerate it under Xlorie instead of dropping to
+             * software rendering. */
+            if (getenv("XLORIE_GLAMOR") && (depth == 24 || depth == 32)) {
+                ErrorF("glamor: tolerating read format/type 0x%x/0x%x for "
+                       "depth %d under Xlorie.\n", read_format, read_type, depth);
+            } else {
+                ErrorF("glamor: Implementation returned 0x%x/0x%x read format/type "
+                       "for depth %d, expected 0x%x/0x%x.  "
+                       "Falling back to software.\n",
+                       read_format, read_type, depth, format, type);
+                return;
+            }
         }
     }
 
@@ -767,9 +775,15 @@ glamor_init(ScreenPtr screen, unsigned int flags)
             goto fail;
         }
 
-        if (!epoxy_has_gl_extension("GL_OES_texture_border_clamp")) {
-            ErrorF("GL_OES_texture_border_clamp required\n");
-            goto fail;
+        if (!epoxy_has_gl_extension("GL_OES_texture_border_clamp") &&
+            !epoxy_has_gl_extension("GL_EXT_texture_border_clamp")) {
+            if (getenv("XLORIE_GLAMOR")) {
+                ErrorF("glamor: GL_OES_texture_border_clamp missing; "
+                       "emulating RepeatNone with CLAMP_TO_EDGE under Xlorie.\n");
+            } else {
+                ErrorF("GL_OES_texture_border_clamp required\n");
+                goto fail;
+            }
         }
     }
 

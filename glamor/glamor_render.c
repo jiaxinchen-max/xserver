@@ -519,6 +519,7 @@ glamor_set_composite_texture(glamor_screen_private *glamor_priv, int unit,
     glamor_pixmap_fbo *fbo = pixmap_priv->fbo;
     float wh[4];
     int repeat_type;
+    static int glamor_border_clamp = -1;
 
     glamor_make_current(glamor_priv);
 
@@ -530,11 +531,24 @@ glamor_set_composite_texture(glamor_screen_private *glamor_priv, int unit,
      */
     glamor_bind_texture(glamor_priv, GL_TEXTURE0 + unit, fbo,
                         dest_priv->fbo->is_red);
+    if (glamor_border_clamp < 0)
+        glamor_border_clamp =
+            (epoxy_has_gl_extension("GL_OES_texture_border_clamp") ||
+             epoxy_has_gl_extension("GL_EXT_texture_border_clamp") ||
+             epoxy_has_gl_extension("GL_ARB_texture_border_clamp")) ? 1 : 0;
+
     repeat_type = picture->repeatType;
     switch (picture->repeatType) {
     case RepeatNone:
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        if (glamor_border_clamp) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        } else {
+            /* Turnip/GLES has no texture_border_clamp; clamp to edge and
+             * emulate RepeatNone in the shader (see the wh-ratio fixup below). */
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        }
         break;
     case RepeatNormal:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -571,7 +585,8 @@ glamor_set_composite_texture(glamor_screen_private *glamor_priv, int unit,
      */
     if (glamor_pixmap_priv_is_large(pixmap_priv) ||
         (!PICT_FORMAT_A(picture->format) &&
-         repeat_type == RepeatNone && picture->transform)) {
+         repeat_type == RepeatNone && picture->transform) ||
+        (!glamor_border_clamp && repeat_type == RepeatNone)) {
         glamor_pixmap_fbo_fix_wh_ratio(wh, pixmap, pixmap_priv);
         glUniform4fv(wh_location, 1, wh);
 
