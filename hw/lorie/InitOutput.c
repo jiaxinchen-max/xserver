@@ -60,6 +60,13 @@
 #include "glamor.h"
 #include "lorie-egl.h"
 #include "lorie-glamor.h"
+
+/* Minimal protocol-only GLX provider (lorie-glx.c): push it onto the GLX
+ * provider stack so the stock swrast provider (which runs Mesa in-process
+ * and blocks on client fences) is never probed. */
+struct __GLXprovider;
+extern void GlxPushProvider(struct __GLXprovider *provider);
+extern struct __GLXprovider lorieGlxProvider;
 #endif
 
 #define LORIE_DEFAULT_WIDTH 1280
@@ -1763,6 +1770,9 @@ InitOutput(ScreenInfo *screenInfo, int argc, char **argv)
         loriePixmapDepths[32] = TRUE;
     }
 
+#ifdef LORIE_HAVE_GLAMOR
+    GlxPushProvider(&lorieGlxProvider);
+#endif
     xorgGlxCreateVendor();
     lorieInitClipboard();
 

@@ -365,6 +365,8 @@ xorgGlxThunkRequest(ClientPtr client)
     XID resource = 0;
     int ret;
 
+    ErrorF("GLXDBG: vendorCode=%u\n", (unsigned) vendorCode);
+
     switch (vendorCode) {
     case X_GLXvop_QueryContextInfoEXT: {
         xGLXQueryContextInfoEXTReq *req = (void *)stuff;

@@ -24,8 +24,8 @@ SRCS =	InitInput.c \
 # libglamor's GLAMOR_LIBS), and lorie-egl.c provides glamor_egl_screen_init so we
 # do not link libglamor_egl_stubs.
 if GLAMOR
-AM_CFLAGS += -DLORIE_HAVE_GLAMOR -I$(top_srcdir)/glamor
-SRCS += lorie-egl.c lorie-egl.h lorie-glamor.c lorie-glamor.h
+AM_CFLAGS += -DLORIE_HAVE_GLAMOR -I$(top_srcdir)/glamor -I$(top_srcdir)/glx
+SRCS += lorie-egl.c lorie-egl.h lorie-glamor.c lorie-glamor.h lorie-glx.c
 # libglamor.la is a real file (valid make prerequisite); GLAMOR_LIBS are linker
 # flags (-L.../-lepoxy) that must only go into LDADD, never DEPENDENCIES.
 GLAMOR_LINK = $(top_builddir)/glamor/libglamor.la

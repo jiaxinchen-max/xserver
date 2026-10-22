@@ -38,9 +38,10 @@ endif
 # so no direct -lEGL/-lGLESv2 is needed. glamor's own glamor_egl_screen_init stub
 # is intentionally NOT linked; lorie-egl.c provides it.
 if build_glamor
-    lorie_srcs += ['lorie-egl.c', 'lorie-glamor.c']
+    lorie_srcs += ['lorie-egl.c', 'lorie-glamor.c', 'lorie-glx.c']
     lorie_c_args += '-DLORIE_HAVE_GLAMOR'
     lorie_inc += include_directories('../../glamor')
+    lorie_inc += include_directories('../../glx')
     lorie_link_with += glamor
     lorie_deps += [epoxy_dep]
 endif

@@ -379,6 +379,9 @@ static int dispatch_GLXVendorPriv(ClientPtr client)
     REQUEST_AT_LEAST_SIZE(*stuff);
 
     disp = LookupVendorPrivDispatch(GlxCheckSwap(client, stuff->vendorCode), TRUE);
+    ErrorF("GLXDBG: vendorPriv vendorCode=%u glxCode=%u\n",
+           (unsigned) GlxCheckSwap(client, stuff->vendorCode),
+           (unsigned) stuff->glxCode);
     if (disp == NULL) {
         return BadAlloc;
     }
@@ -394,7 +397,11 @@ static int dispatch_GLXVendorPriv(ClientPtr client)
                                            GlxCheckSwap(client,
                                                         stuff->vendorCode));
     }
-    return disp->proc(client);
+    {
+        int r = disp->proc(client);
+        ErrorF("GLXDBG: vendorPriv result=%d\n", r);
+        return r;
+    }
 }
 
 Bool GlxDispatchInit(void)
@@ -470,6 +477,10 @@ void GlxDispatchReset(void)
 
 int GlxDispatchRequest(ClientPtr client)
 {
+    {
+        CARD8 minor = ((CARD8 *) client->requestBuffer)[0];
+        ErrorF("GLXDBG: dispatch minor=%u\n", (unsigned) minor);
+    }
     REQUEST(xReq);
     int result;
 
