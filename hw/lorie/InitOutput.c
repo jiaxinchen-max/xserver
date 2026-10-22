@@ -830,10 +830,22 @@ lorieDri3GlamorPixmap(ScreenPtr screen, int fd, CARD16 width, CARD16 height,
         return NullPixmap;
 
     if (S_ISSOCK(st.st_mode)) {
-        /* gl4es / Termux private DRI3 ABI: AHB handle over a unix socket. */
-        LorieBuffer_recvHandleFromUnixSocket(fd, &buffer);
-        if (!buffer)
+        /* gl4es / Termux private DRI3 ABI: the client sends the AHB over the
+         * socket using the ANDROID NATIVE handle protocol
+         * (AHardwareBuffer_sendHandleToUnixSocket), not the termux-render
+         * struct protocol -- so receive via libandroid directly, then wrap. */
+        AHardwareBuffer *ahb = NULL;
+
+        if (lorieEglRecvAhardwareBuffer(fd, &ahb) != 0 || !ahb) {
+            lorieLog("Xlorie: AHB recv over DRI3 socket failed\n");
             return NullPixmap;
+        }
+        buffer = LorieBuffer_wrapAHardwareBuffer(ahb);   /* takes ownership */
+        if (!buffer) {
+            /* AHardwareBuffer_release is API 26+; wrap only fails on OOM, so
+             * accept the leak rather than add a libandroid dynamic call here. */
+            return NullPixmap;
+        }
     } else {
         /* Mesa/zink client: a dma-buf fd. Wrap it so Present can register it. */
         buffer = LorieBuffer_wrapFileDescriptor(width, stride / sizeof(uint32_t),

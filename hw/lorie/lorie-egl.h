@@ -35,6 +35,13 @@ struct glamor_context;
 /* Diagnostic: log a dladdr-resolved backtrace of the caller. */
 void egl_log_backtrace(void);
 
+/* Receive a client AHardwareBuffer over a DRI3 unix socket (the gl4es/Termux
+ * private DRI3 ABI uses the Android native handle protocol, NOT the
+ * termux-render struct protocol). Resolves
+ * AHardwareBuffer_recvHandleFromUnixSocket from the system libandroid via
+ * platform_dlopen, mirroring the KWin backend. Returns 0 on success. */
+int lorieEglRecvAhardwareBuffer(int socketFd, AHardwareBuffer **outBuffer);
+
 enum lorie_gl_mode {
     LORIE_GL_FALLBACK = 0,  /* no GPU: keep the software fb path */
     LORIE_GL_SYSTEM,        /* Android system EGL/GLES, AHB native import */

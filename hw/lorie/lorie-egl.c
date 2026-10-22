@@ -457,6 +457,50 @@ lorieEglDestroyImage(EGLImageKHR image)
         eglDestroyImageKHR(egl.display, image);
 }
 
+typedef void *(*PlatformDlopenFn)(const char *, int);
+typedef int (*RecvHandleFn)(int, AHardwareBuffer **);
+
+int
+lorieEglRecvAhardwareBuffer(int socketFd, AHardwareBuffer **outBuffer)
+{
+    static RecvHandleFn recv = NULL;
+    static int resolved = 0;
+
+    if (!resolved) {
+        PlatformDlopenFn platformDlopen;
+        void *library = NULL;
+
+        resolved = 1;
+        platformDlopen = (PlatformDlopenFn) dlsym(RTLD_DEFAULT, "platform_dlopen");
+        if (!platformDlopen) {
+            void *ns = dlopen("libtermux-platform-ns.so", RTLD_NOW | RTLD_LOCAL);
+
+            if (ns)
+                platformDlopen = (PlatformDlopenFn) dlsym(ns, "platform_dlopen");
+        }
+#if defined(__LP64__)
+        if (platformDlopen)
+            library = platformDlopen("/system/lib64/libandroid.so",
+                                     RTLD_NOW | RTLD_LOCAL);
+#else
+        if (platformDlopen)
+            library = platformDlopen("/system/lib/libandroid.so",
+                                     RTLD_NOW | RTLD_LOCAL);
+#endif
+        if (!library)
+            library = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
+        if (library)
+            recv = (RecvHandleFn) dlsym(library,
+                                        "AHardwareBuffer_recvHandleFromUnixSocket");
+    }
+
+    if (!recv) {
+        lorieLog("Xlorie: AHardwareBuffer_recvHandleFromUnixSocket unavailable\n");
+        return -1;
+    }
+    return recv(socketFd, outBuffer);
+}
+
 GLuint
 lorieEglTextureFromImage(EGLImageKHR image)
 {
