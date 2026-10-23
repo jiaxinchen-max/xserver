@@ -60,13 +60,8 @@ miSyncShmFenceReset(SyncFence * pFence)
 {
     SyncShmFencePrivatePtr      pPriv = SYNC_FENCE_PRIV(pFence);
 
-    /* Keep client fences permanently triggered: any server-side await on the
-     * shared value (e.g. Mesa's DRI3 loader inside the server process) must
-     * return immediately, otherwise it deadlocks with the client which is
-     * itself waiting for the server. GPU synchronization is provided by
-     * glFinish() before frame handoff instead. */
     if (pPriv->fence)
-        xshmfence_trigger(pPriv->fence);
+        xshmfence_reset(pPriv->fence);
     miSyncFenceReset(pFence);
 }
 
@@ -135,10 +130,6 @@ miSyncShmCreateFenceFromFd(ScreenPtr pScreen, SyncFence *pFence, int fd, Bool in
     fd = os_move_fd(fd);
     pPriv->fence = xshmfence_map_shm(fd);
     if (pPriv->fence) {
-        /* Immediately trigger the client's fence: we do not block on client
-         * GPU fences (see miSyncShmFenceReset above); a blocked await in the
-         * server process deadlocks with the waiting client. */
-        xshmfence_trigger(pPriv->fence);
         pPriv->fd = fd;
         return Success;
     }

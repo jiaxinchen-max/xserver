@@ -1,13 +1,11 @@
 /*
  * Xlorie minimal GLX provider.
  *
- * The stock xorg GLX init probes the always-present DRI swrast provider,
- * which loads Mesa into the server process and runs an in-process DRI3
- * loader that blocks on client sync fences (cross-process deadlock with the
- * waiting client). This provider replaces it with a PROTOCOL-ONLY screen:
+ * Provide GLX protocol objects without loading a server-side GLX driver:
  * fbconfigs from a small static table, contexts/drawables as shells. Direct
- * rendering is entirely client-side (DRI3 dma-buf imports into the glamor
- * screen), so the server never touches client fences or a GL driver.
+ * rendering is entirely client-side (Zink/Kopper presents DRI3 dma-bufs to
+ * the glamor screen). Shared X Sync fences still use normal xshmfence
+ * semantics and require the same futex ABI in native and container clients.
  *
  * Register with GlxPushProvider() before xorgGlxCreateVendor(): the provider
  * stack is probed head-first, so this one wins over the swrast fallback.
@@ -19,6 +17,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <GL/glxtokens.h>
 
 #include "glxserver.h"
 #include "glxcontext.h"
@@ -30,10 +29,6 @@
 #include "lorie.h"
 #include "log.h"
 
-#ifndef GLX_DOUBLE_BUFFER
-#define GLX_DOUBLE_BUFFER 5
-#define GLX_SINGLE_BUFFER 6
-#endif
 #ifndef GLX_TRUE_COLOR
 #define GLX_TRUE_COLOR 0x8002   /* GLX protocol visual type */
 #endif
@@ -58,7 +53,7 @@ lorieGlxConfigInit(__GLXconfig *c, int doubleBuffer, int alphaBits,
                    int rgbBits)
 {
     memset(c, 0, sizeof(*c));
-    c->doubleBufferMode = doubleBuffer;
+    c->doubleBufferMode = !!doubleBuffer;
     c->stereoMode = 0;
     c->redBits = c->greenBits = c->blueBits = 8;
     c->alphaBits = alphaBits;
@@ -70,13 +65,13 @@ lorieGlxConfigInit(__GLXconfig *c, int doubleBuffer, int alphaBits,
     c->blueMask = 0x000000ff;
     c->alphaMask = alphaBits ? 0xff000000 : 0;
     c->indexBits = 0;
-    c->depthBits = rgbBits == 32 ? 24 : 24;
+    c->depthBits = 24;
     c->stencilBits = 0;
     c->numAuxBuffers = 0;
     c->level = 0;
     c->visualType = GLX_TRUE_COLOR;
     c->visualRating = GLX_NONE_EXT;
-    c->transparentPixel = 0;
+    c->transparentPixel = GLX_NONE_EXT;
     c->transparentIndex = 0;
     c->sampleBuffers = 0;
     c->samples = 0;
@@ -87,9 +82,13 @@ lorieGlxConfigInit(__GLXconfig *c, int doubleBuffer, int alphaBits,
     c->optimalPbufferWidth = c->optimalPbufferHeight = 0;
     c->visualSelectGroup = 0;
     c->swapMethod = GLX_SWAP_UNDEFINED_OML;
-    c->bindToTextureRgb = c->bindToTextureRgba = 0;
+    /* Mesa's GLX loader matches these attributes even for window configs.
+     * Direct texture-from-pixmap binding is handled by the client driver. */
+    c->bindToTextureRgb = c->bindToTextureRgba = 1;
     c->bindToMipmapTexture = 0;
-    c->bindToTextureTargets = 0;
+    c->bindToTextureTargets = GLX_TEXTURE_1D_BIT_EXT |
+                             GLX_TEXTURE_2D_BIT_EXT |
+                             GLX_TEXTURE_RECTANGLE_BIT_EXT;
     c->yInverted = 1;
 }
 
@@ -253,18 +252,22 @@ lorieGlxScreenProbe(ScreenPtr pScreen)
     __GLXscreen *screen;
     __GLXconfig *configs, *configs2;
 
-    /* __glXScreenDestroy frees every config in the list, so allocate them. */
-    configs = calloc(2, sizeof *configs);
-    if (!configs)
+    /* __glXScreenDestroy frees each node separately. */
+    configs = calloc(1, sizeof *configs);
+    configs2 = calloc(1, sizeof *configs2);
+    if (!configs || !configs2) {
+        free(configs);
+        free(configs2);
         return NULL;
-    configs2 = configs + 1;
-    lorieGlxConfigInit(configs, GLX_DOUBLE_BUFFER, 8, 32);
-    lorieGlxConfigInit(configs2, GLX_DOUBLE_BUFFER, 0, 24);
+    }
+    lorieGlxConfigInit(configs, 1, 8, 32);
+    lorieGlxConfigInit(configs2, 1, 0, 24);
     configs->next = configs2;
 
     screen = calloc(1, sizeof *screen);
     if (!screen) {
         free(configs);
+        free(configs2);
         return NULL;
     }
 
