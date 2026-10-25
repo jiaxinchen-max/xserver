@@ -18,17 +18,34 @@
 #define AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM 5
 #endif
 
+#ifndef AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM
+#define AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM 2
+#endif
+
 /*
  * The app's renderer (termux-x11 lorie renderer.c) samples a root buffer through its ".bgra"
  * shader, i.e. it swaps red and blue, for every AHB whose format is not B8G8R8A8
- * (LorieBuffer_isRgba). That convention exists because the legacy in-process X server writes
- * X's native BGRX bytes into a buffer declared R8G8B8X8. Xlorie renders colours with the GPU in
- * logical RGB, so with R8G8B8X8 every colour came out with red and blue exchanged. Declaring the
- * buffer B8G8R8A8 makes the renderer sample it unswapped.
+ * (LorieBuffer_isRgba). Which declaration shows correct colours depends on who writes the buffer:
+ *  - GPU (glamor): renders logical RGB straight into the AHB -> declare B8G8R8A8 (no swap).
+ *  - software framebuffer (EGL unavailable, -noglamor): X writes its native BGRX bytes, which the
+ *    swap in the renderer expects to find in a buffer declared R8G8B8X8, as the legacy in-process
+ *    server does.
+ * The format is fixed when the buffer is created, so the caller must say whether the GPU path
+ * will be used (lorieRenderSetGpuRendering) before lorieRenderConnect().
  */
-#ifndef XLORIE_RENDER_BUFFER_FORMAT
-#define XLORIE_RENDER_BUFFER_FORMAT AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM
+static int renderBufferFormat = AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM;
+
+void
+lorieRenderSetGpuRendering(bool gpu)
+{
+#ifdef XLORIE_RENDER_BUFFER_FORMAT
+    (void) gpu;
+    renderBufferFormat = XLORIE_RENDER_BUFFER_FORMAT;
+#else
+    renderBufferFormat = gpu ? AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM
+                             : AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM;
 #endif
+}
 
 #ifndef XLORIE_RENDER_BUFFER_TYPE
 #if defined(XLORIE_RENDER_USE_FD_ONLY) && XLORIE_RENDER_USE_FD_ONLY
@@ -106,7 +123,7 @@ lorieRenderConnect(int width, int height, int framerate)
                  TERMUX_RENDER_SOCKET_PATH, requestedSocketPath);
     }
 
-    setScreenConfig(width, height, framerate, XLORIE_RENDER_BUFFER_FORMAT,
+    setScreenConfig(width, height, framerate, renderBufferFormat,
                     XLORIE_RENDER_BUFFER_TYPE);
     setKeycodeFormat(LORIE_KEYCODE_XKB);
     if (connectToRender() != 0) {

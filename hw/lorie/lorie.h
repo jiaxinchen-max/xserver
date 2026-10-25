@@ -15,6 +15,7 @@
 #endif
 
 void lorieRenderSetSocketPath(const char *path);
+void lorieRenderSetGpuRendering(bool gpu);
 bool lorieRenderConnect(int width, int height, int framerate);
 void lorieRenderDisconnect(void);
 bool lorieRenderSignalFrame(void);

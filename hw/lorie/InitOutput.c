@@ -1630,6 +1630,19 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
     loriePresentUpdateMsc();
 #endif
 
+#ifdef LORIE_HAVE_GLAMOR
+    /* Decide GPU vs software rendering BEFORE connecting: the root buffer's format (colour
+     * channel order) is fixed when the app allocates it, see lorieRenderSetGpuRendering(). */
+    lorieGlMode = Glamor ? lorieEglResolveMode() : LORIE_GL_FALLBACK;
+    glamorActive = (lorieGlMode != LORIE_GL_FALLBACK) &&
+                   lorieEglInit(lorieGlMode);
+    if (!glamorActive && lorieGlMode != LORIE_GL_FALLBACK)
+        lorieLog("Xlorie: EGL init failed; using software fb path\n");
+    lorieRenderSetGpuRendering(glamorActive);
+#else
+    lorieRenderSetGpuRendering(FALSE);
+#endif
+
     if (!lorieRenderConnect(lorieScreen.width, lorieScreen.height,
                             lorieScreen.framerate))
         return FALSE;
@@ -1640,12 +1653,6 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
     desc = LorieBuffer_description(lorieScreen.rootBuffer);
 
 #ifdef LORIE_HAVE_GLAMOR
-    lorieGlMode = Glamor ? lorieEglResolveMode() : LORIE_GL_FALLBACK;
-    glamorActive = (lorieGlMode != LORIE_GL_FALLBACK) &&
-                   lorieEglInit(lorieGlMode);
-    if (!glamorActive && lorieGlMode != LORIE_GL_FALLBACK)
-        lorieLog("Xlorie: EGL init failed; using software fb path\n");
-
     if (glamorActive) {
         /* The termux-render root AHB is GPU-only (not CPU-lockable); glamor
          * renders into it as a texture. fb only needs scratch storage for the
