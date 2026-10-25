@@ -127,11 +127,12 @@ lorieGlamorCreateTexturedPixmap(ScreenPtr screen, int width, int height,
     if (!pixmap)
         return NULL;
 
+    /* Type first, then texture (see lorieGlamorBackScreenPixmap). */
+    glamor_set_pixmap_type(pixmap, GLAMOR_TEXTURE_DRM);
     if (!glamor_set_pixmap_texture(pixmap, texture)) {
         screen->DestroyPixmap(pixmap);
         return NULL;
     }
-    glamor_set_pixmap_type(pixmap, GLAMOR_TEXTURE_DRM);
     return pixmap;
 }
 
@@ -158,11 +159,18 @@ lorieGlamorBackScreenPixmap(ScreenPtr screen, LorieBuffer *root,
         return FALSE;
     }
 
+    /* glamor_pixmap_attach_fbo() only marks a pixmap as FBO-backed (gl_fbo = GLAMOR_FBO_NORMAL)
+     * when its type is already a texture type at attach time. The screen pixmap starts as
+     * GLAMOR_MEMORY (it is created 0x0 by miCreateScreenResources), so the type must be set
+     * BEFORE glamor_set_pixmap_texture(), as upstream does in glamor_egl.c. Setting it afterwards
+     * leaves gl_fbo UNATTACHED: every glamor operation then takes its CPU fallback and draws
+     * into the scratch framebuffer instead of the shared AHB texture. */
+    glamor_set_pixmap_type(pixmap, GLAMOR_TEXTURE_DRM);
     if (!glamor_set_pixmap_texture(pixmap, texture)) {
+        glamor_set_pixmap_type(pixmap, GLAMOR_MEMORY);
         lorieEglDestroyImage(image);
         return FALSE;
     }
-    glamor_set_pixmap_type(pixmap, GLAMOR_TEXTURE_DRM);
 
     if (outImage)
         *outImage = image;

@@ -4,7 +4,9 @@
 
 #include <errno.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 #include "lorie.h"
@@ -12,8 +14,20 @@
 
 #define TERMUX_RENDER_SOCKET_PATH "/data/data/com.termux/files/home/tmp/termux-render"
 
+#ifndef AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM
+#define AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM 5
+#endif
+
+/*
+ * The app's renderer (termux-x11 lorie renderer.c) samples a root buffer through its ".bgra"
+ * shader, i.e. it swaps red and blue, for every AHB whose format is not B8G8R8A8
+ * (LorieBuffer_isRgba). That convention exists because the legacy in-process X server writes
+ * X's native BGRX bytes into a buffer declared R8G8B8X8. Xlorie renders colours with the GPU in
+ * logical RGB, so with R8G8B8X8 every colour came out with red and blue exchanged. Declaring the
+ * buffer B8G8R8A8 makes the renderer sample it unswapped.
+ */
 #ifndef XLORIE_RENDER_BUFFER_FORMAT
-#define XLORIE_RENDER_BUFFER_FORMAT AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM
+#define XLORIE_RENDER_BUFFER_FORMAT AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM
 #endif
 
 #ifndef XLORIE_RENDER_BUFFER_TYPE
@@ -56,6 +70,26 @@ lorieRenderSetSocketPath(const char *path)
     requestedSocketPath = path;
 }
 
+/*
+ * libtermux-render hands the root buffer over either as a native AHardwareBuffer handle
+ * (TERMUX_RENDER_AHB_RECEIVE=native) or as dma-buf fds (the default). With Android's system
+ * EGL/GLES (XLORIE_GL_MODE=system, which is also the default), only the native handle can be
+ * imported: eglCreateImageKHR from the dma-buf fails on Adreno, glamor then cannot back the
+ * root pixmap on the GPU and nothing is displayed. This must be decided before
+ * connectToRender() receives the buffer, i.e. before the EGL mode is resolved, so mirror
+ * lorieEglResolveMode() here. An explicit TERMUX_RENDER_AHB_RECEIVE always wins.
+ */
+static void
+lorieRenderChooseReceiveMode(void)
+{
+    const char *mode = getenv("XLORIE_GL_MODE");
+
+    if (!mode || !*mode)
+        mode = getenv("KWIN_ANDROID_GL_MODE");
+    if (!mode || !*mode || !strcasecmp(mode, "system"))
+        setenv("TERMUX_RENDER_AHB_RECEIVE", "native", 0);
+}
+
 bool
 lorieRenderConnect(int width, int height, int framerate)
 {
@@ -63,6 +97,8 @@ lorieRenderConnect(int width, int height, int framerate)
 
     if (connected)
         return true;
+
+    lorieRenderChooseReceiveMode();
 
     if (requestedSocketPath && strcmp(requestedSocketPath,
                                       TERMUX_RENDER_SOCKET_PATH) != 0) {
