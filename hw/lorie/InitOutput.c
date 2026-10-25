@@ -150,6 +150,8 @@ static Bool Dri3 = TRUE;
 #endif
 #ifdef LORIE_HAVE_GLAMOR
 static Bool Glamor = TRUE;
+/* A client present flipped the displayed buffer away from the server's root buffer. */
+static Bool presentFlipped = FALSE;
 static Bool glamorActive = FALSE;
 static Bool lorieFbIsScratch = FALSE;
 static enum lorie_gl_mode lorieGlMode = LORIE_GL_FALLBACK;
@@ -413,6 +415,15 @@ lorieBlockHandler(void *blockData, void *timeout)
     loriePerformVblanks();
 #endif
     if (lorieRootDamaged()) {
+        /* A one-shot fullscreen present (e.g. a compositor's DRI3 flip) must not keep the
+         * display pointed at the client's buffer while the server keeps drawing the real
+         * root: restore the root buffer before flushing, like loriePresentUnflip does. */
+        if (presentFlipped) {
+            LorieBuffer *root = lorieScreen.rootBuffer ?
+                lorieScreen.rootBuffer : lorieRenderBuffer();
+            if (lorieRenderUseBuffer(root))
+                presentFlipped = FALSE;
+        }
         if (!lorieFlushRootBuffer())
             lorieLog("Failed to flush Xlorie root AHardwareBuffer\n");
         lorieMarkRootClean();
@@ -680,6 +691,11 @@ loriePresentCheckFlip(RRCrtcPtr crtc, WindowPtr window, PixmapPtr pixmap,
     if (!Dri3 || !window || !pixmap)
         return FALSE;
 
+    /* Presents aimed at the root window itself (background tiles, compositor leftovers)
+     * must go through the copy path: flipping there would replace the whole display. */
+    if (window == window->drawable.pScreen->root)
+        return FALSE;
+
     priv = dixLookupPrivate(&pixmap->devPrivates, &loriePixmapPrivateKey);
     if (!priv || !priv->buffer)
         return FALSE;
@@ -745,6 +761,7 @@ loriePresentFlip(RRCrtcPtr crtc, uint64_t eventId, uint64_t targetMsc,
     event->msc = targetMsc;
     xorg_list_add(&event->link, &lorieScreen.vblankQueue);
 
+    presentFlipped = TRUE;
     return TRUE;
 #else
     (void) crtc;
@@ -764,7 +781,8 @@ loriePresentUnflip(ScreenPtr screen, uint64_t eventId)
 
     (void) screen;
 
-    (void) lorieRenderUseBuffer(buffer);
+    if (lorieRenderUseBuffer(buffer))
+        presentFlipped = FALSE;
     present_event_notify(eventId, 0, 0);
 }
 

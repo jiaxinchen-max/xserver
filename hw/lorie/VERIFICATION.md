@@ -28,7 +28,17 @@ bridge, not a rendering failure.
    offers window/pixmap configs only (no pbuffer, no indirect), which the Qt X11 OpenGL scene
    needs. KWin must use its Wayland backend against termux-render (verified working,
    kwin release r19, native and proot).
-2. **glibc xfwm4 as window manager blacks out the root window.** With a proot Debian XFCE4
+2. **glibc xfwm4 as window manager blacks out the root window.** (root cause narrowed 2026-10-26:
+   the container's Mesa initialises GLX/DRI3 against Xlorie's minimal GLX provider; the session's
+   root presentation then stops reaching the app view while the server keeps flushing and the app
+   keeps presenting. Present-flip is NOT involved (zero check_flip calls). Mitigation shipped:
+   `XLORIE_GLX=0` advertises an empty GLX (no fbconfigs) so glibc clients fall back to XRender,
+   which glamor composites on the GPU; the provider stays on the stack so swrast is never probed.
+   Desktop flows that need client GL (gl4es games) keep GLX by default. Hardening also shipped:
+   presents aimed at the root window never flip, and a live flip is undone as soon as the root
+   takes new damage (loriePresentFlip/Unflip track `presentFlipped`). Original trigger details:
+   container xfwm4 4.20 logs Mesa `failed to load driver: (null)`, server logs 1280x720 DRI3
+   imports + one `fds_from_pixmap` at wm start; killing xfwm4 restores the picture. With a proot Debian XFCE4
    session on Xlorie (zink), adding the container's `xfwm4` makes the whole root presentation
    black for every client (native and glibc); killing `xfwm4` restores it. Disabling
    xfwm4's compositor (`xfconf /general/compositing_manager false`) does NOT help, so it is

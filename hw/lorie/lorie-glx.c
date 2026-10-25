@@ -275,6 +275,20 @@ lorieGlxScreenProbe(ScreenPtr pScreen)
     screen->createContext = lorieGlxCreateContext;
     screen->createDrawable = lorieGlxCreateDrawable;
     screen->swapInterval = lorieGlxSwapInterval;
+    /* XLORIE_GLX=0 advertises an empty GLX (no fbconfigs). glibc Mesa clients (a container
+     * compositor such as xfwm4) otherwise initialise GLX/DRI3 against this minimal protocol
+     * provider and can leave the session with a black root window; with no configs they fall
+     * back to XRender, which the server's glamor composites on the GPU. The provider stays on
+     * the stack so the in-process swrast provider is never probed. */
+    {
+        const char *glxEnv = getenv("XLORIE_GLX");
+        if (glxEnv && strcmp(glxEnv, "0") == 0) {
+            free(configs->next);
+            free(configs);
+            configs = NULL;
+            lorieLog("Xlorie: GLX disabled by XLORIE_GLX=0\n");
+        }
+    }
     screen->fbconfigs = configs;
 
     __glXInitExtensionEnableBits(screen->glx_enable_bits);
