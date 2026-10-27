@@ -411,6 +411,7 @@ lorieBlockHandler(void *blockData, void *timeout)
 {
     struct lorie_shared_server_state *state = lorieRenderState();
 
+    lorieInputRefresh();
 #ifdef PRESENT
     loriePerformVblanks();
 #endif

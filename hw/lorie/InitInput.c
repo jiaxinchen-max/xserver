@@ -442,6 +442,19 @@ lorieInputRegisterFd(int fd)
     return 0;
 }
 
+/* The termux-render bridge connects after InitInput() ran (the fd was still -1),
+ * and reconnects on every client restart: follow the current input fd. */
+void
+lorieInputRefresh(void)
+{
+    int fd = lorieRenderInputFd();
+
+    if (fd < 0 || fd == registeredInputFd)
+        return;
+    if (lorieInputRegisterFd(fd) == 0)
+        lorieLog("Xlorie: input fd registered (%d)\n", fd);
+}
+
 void
 lorieInputUnregister(void)
 {

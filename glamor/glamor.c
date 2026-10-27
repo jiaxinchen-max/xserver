@@ -572,6 +572,21 @@ glamor_setup_formats(ScreenPtr screen)
                           GL_ALPHA, GL_ALPHA, GL_UNSIGNED_BYTE, TRUE);
     }
 
+    /* Some GLES stacks (the Android emulator translator) report a color read
+     * format other than GL_RED for R8 framebuffers.  glamor_add_format() then
+     * leaves the depth-8 entry empty, and uploading A8 Render masks/glyphs with
+     * a zero internalformat yields an invalid texture that samples as opaque
+     * (solid glyph boxes).  Keep A8 textures usable for sampling with the
+     * classic GL_ALPHA layout; they stay CPU-rendered (not renderable in ES). */
+    if (glamor_priv->is_gles) {
+        if (glamor_priv->formats[8].depth != 8)
+            glamor_add_format(screen, 8, PICT_a8,
+                              GL_ALPHA, GL_ALPHA, GL_UNSIGNED_BYTE, FALSE);
+        if (glamor_priv->formats[1].depth != 1)
+            glamor_add_format(screen, 1, PICT_a1,
+                              GL_ALPHA, GL_ALPHA, GL_UNSIGNED_BYTE, FALSE);
+    }
+
     if (glamor_priv->is_gles) {
         /* For 15bpp, GLES supports format/type RGBA/5551, rather than
          * bgra/1555_rev.  GL_EXT_bgra lets the impl say the color
