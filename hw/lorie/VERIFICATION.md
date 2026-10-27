@@ -55,6 +55,15 @@ bridge, not a rendering failure.
 5. Other ABIs (x86_64/arm/i686) were never built: the packaging tree lacks per-arch dependency
    sysroots (`configure: C compiler cannot create executables`). The code is arch-neutral C.
 
+- Xft/Cairo text (GTK, xfwm4) drew as solid black boxes on GLES stacks whose R8 framebuffer
+  read format is not GL_RED (seen on the Android emulator's GLES translator): glamor skipped the
+  depth-8 format, so A8 Render masks/glyphs uploaded as invalid textures that sample opaque.
+  `glamor_setup_formats` now registers a non-renderable GL_ALPHA fallback for depth 8/1.
+  Verified on the arm64 emulator (XRender A8 gradient mask draws a gradient; XFCE text readable).
+  Not yet re-verified on a real Adreno device, where the read-format check normally passes.
+- Input over the bridge: the bridge connects after InitInput(), so `lorieInputRefresh()` (called
+  from the block handler) registers/follows the current input fd.
+
 ## Test recipes
 
 - Server: `Xlorie :1 -noreset -ac -nolisten tcp -screen 0 1280x720x24 -framerate 30
