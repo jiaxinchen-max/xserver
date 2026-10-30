@@ -1,0 +1,20 @@
+{
+  "repository": "https://github.com/jiaxinchen-max/xserver",
+  "base_branch": "termuxdc",
+  "base_commit": "d9d2bd1d32a4965a07c4b1c5ed27cef84167fcb3",
+  "release_tag": "termux-xlorie-21.1.16-r8",
+  "package_version": "21.1.16-8",
+  "source_date_epoch": 1793379350,
+  "source_sha256": {
+    "hw/lorie/InitOutput.c": "5ca1f83d3dfc9bc4729a5c53160b7ada95ed7e066240eaf1e3a3e6f18e607866",
+    "hw/lorie/lorie-glx.c": "a545fc24ba535fd678f97c59261e881088eefc27838cc9314791217d58ad57cb"
+  },
+  "input_sha256": {
+    "base/xorg-server_21.1.16-6_aarch64.deb": "9533f812ea464987cf66bf2aa89deb7e2862e289ae5a14a9ca3d6a48b7255016",
+    "verified/Xlorie": "a709d798dd347c72166a0572ece320f5d2c47d2a29dedb2f5f871297208be0a8"
+  },
+  "expected_deb_sha256": "0a243786b8ac14e6557590b5c6c4b14f7d51358084c5075383a06aa57e2128a2",
+  "reproduce_command": "python3 source/packaging/termux/repack-xorg-server-r8.py --base-deb base/xorg-server_21.1.16-6_aarch64.deb --xlorie verified/Xlorie --output-dir output --version 21.1.16-8 --source-date-epoch 1793379350",
+  "native_build": "NDK android-r30-api-24-v0; Xserver configure settings from /workspace/termux-packages/x11-packages/xorg-server/build.sh; incremental make -C xserver-build/hw/lorie -j2 on the verified r7 build",
+  "scope": "Deb packaging is byte-reproducible with the pinned validated binary. This does not claim a bit-identical native rebuild."
+}

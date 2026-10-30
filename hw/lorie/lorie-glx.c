@@ -24,6 +24,7 @@
 #include "glxdrawable.h"
 #include "glxscreens.h"
 #include "glxext.h"
+#include "glxutil.h"
 #include "extension_string.h"
 
 #include "lorie.h"
@@ -50,7 +51,7 @@
 
 static void
 lorieGlxConfigInit(__GLXconfig *c, int doubleBuffer, int alphaBits,
-                   int rgbBits)
+                   int rgbBits, int depthBits, int stencilBits)
 {
     memset(c, 0, sizeof(*c));
     c->doubleBufferMode = !!doubleBuffer;
@@ -65,8 +66,8 @@ lorieGlxConfigInit(__GLXconfig *c, int doubleBuffer, int alphaBits,
     c->blueMask = 0x000000ff;
     c->alphaMask = alphaBits ? 0xff000000 : 0;
     c->indexBits = 0;
-    c->depthBits = 24;
-    c->stencilBits = 0;
+    c->depthBits = depthBits;
+    c->stencilBits = stencilBits;
     c->numAuxBuffers = 0;
     c->level = 0;
     c->visualType = GLX_TRUE_COLOR;
@@ -177,6 +178,7 @@ lorieGlxCreateContext(__GLXscreen *screen, __GLXconfig *config,
 static void
 lorieGlxDrawableDestroy(__GLXdrawable *drawable)
 {
+    __glXDrawableRelease(drawable);
     free(drawable);
 }
 
@@ -214,22 +216,24 @@ lorieGlxCreateDrawable(ClientPtr client, __GLXscreen *screen,
     __GLXdrawable *drawable;
 
     (void) client;
-    (void) screen;
-    (void) glxDrawId;
+    (void) drawId;
 
     drawable = calloc(1, sizeof *drawable);
     if (!drawable)
         return NULL;
+
+    /* drawId names the underlying X drawable; GLX validation and paired
+     * resource destruction require the distinct GLXWindow/GLXPixmap ID. */
+    if (!__glXDrawableInit(drawable, screen, pDraw, type, glxDrawId, config)) {
+        free(drawable);
+        return NULL;
+    }
 
     drawable->destroy = lorieGlxDrawableDestroy;
     drawable->swapBuffers = lorieGlxDrawableSwapBuffers;
     drawable->copySubBuffer = lorieGlxDrawableCopySubBuffer;
     drawable->waitX = lorieGlxDrawableWaitX;
     drawable->waitGL = lorieGlxDrawableWaitGL;
-    drawable->pDraw = pDraw;
-    drawable->drawId = drawId;
-    drawable->type = type;
-    drawable->config = config;
     return drawable;
 }
 
@@ -246,29 +250,64 @@ lorieGlxScreenDestroy(__GLXscreen *screen)
     __glXScreenDestroy(screen);
 }
 
+/* Configs describe client-side Mesa renderbuffers, not the root AHB's
+ * attachments. Keep the existing depth24/no-stencil variants and offer
+ * packed depth24/stencil8 for Cogl's mandatory stencil clipping, plus
+ * attachment-free variants for clients that do not need depth/stencil. */
+static __GLXconfig *
+lorieGlxCreateConfigs(void)
+{
+    static const struct {
+        int alphaBits, rgbBits, depthBits, stencilBits;
+    } formats[] = {
+        { 8, 32, 24, 0 },
+        { 0, 24, 24, 0 },
+        { 8, 32, 24, 8 },
+        { 0, 24, 24, 8 },
+        { 8, 32,  0, 0 },
+        { 0, 24,  0, 0 },
+    };
+    __GLXconfig *configs = NULL, **tail = &configs;
+    size_t i;
+
+    for (i = 0; i < sizeof(formats) / sizeof(formats[0]); i++) {
+        __GLXconfig *config = calloc(1, sizeof(*config));
+        if (!config) {
+            while (configs) {
+                __GLXconfig *next = configs->next;
+                free(configs);
+                configs = next;
+            }
+            return NULL;
+        }
+        lorieGlxConfigInit(config, 1, formats[i].alphaBits,
+                           formats[i].rgbBits, formats[i].depthBits,
+                           formats[i].stencilBits);
+        *tail = config;
+        tail = &config->next;
+    }
+    return configs;
+}
+
 static __GLXscreen *
 lorieGlxScreenProbe(ScreenPtr pScreen)
 {
     __GLXscreen *screen;
-    __GLXconfig *configs, *configs2;
+    __GLXconfig *configs;
 
     /* __glXScreenDestroy frees each node separately. */
-    configs = calloc(1, sizeof *configs);
-    configs2 = calloc(1, sizeof *configs2);
-    if (!configs || !configs2) {
-        free(configs);
-        free(configs2);
-        return NULL;
-    }
-    lorieGlxConfigInit(configs, 1, 8, 32);
-    lorieGlxConfigInit(configs2, 1, 0, 24);
-    configs->next = configs2;
+    configs = lorieGlxCreateConfigs();
+    if (!configs)
+        FatalError("Xlorie: selected GLX provider could not allocate FBConfigs; startup aborted\n");
 
     screen = calloc(1, sizeof *screen);
     if (!screen) {
-        free(configs);
-        free(configs2);
-        return NULL;
+        while (configs) {
+            __GLXconfig *next = configs->next;
+            free(configs);
+            configs = next;
+        }
+        FatalError("Xlorie: selected GLX provider could not allocate its screen; startup aborted\n");
     }
 
     screen->destroy = lorieGlxScreenDestroy;
@@ -309,19 +348,26 @@ lorieGlxScreenProbe(ScreenPtr pScreen)
     }
     /* Match the client-side Mesa vendor name. */
     screen->glvnd = strdup("mesa");
-    screen->GLXextensions = strdup("GLX_ARB_create_context "
-                                   "GLX_ARB_create_context_profile "
-                                   "GLX_ARB_multisample "
-                                   "GLX_EXT_visual_info "
-                                   "GLX_EXT_visual_rating "
-                                   "GLX_SGI_make_current_read "
-                                   "GLX_ARB_framebuffer_sRGB "
-                                   "GLX_EXT_framebuffer_sRGB "
-                                   "GLX_ARB_get_proc_address "
-                                   "GLX_EXT_texture_from_pixmap "
-                                   "GLX_EXT_swap_control ");
+    if (!screen->glvnd)
+        FatalError("Xlorie: selected GLX provider could not allocate its vendor name; startup aborted\n");
+    /* __glXScreenInit owns and builds GLXextensions from glx_enable_bits.
+     * A preallocated string would be discarded by that initializer. */
 
     __glXScreenInit(screen, pScreen);
+    /* The core initializer returns void, including when private-key setup
+     * fails. Never return an incomplete provider or NULL to the provider
+     * stack: that would allow another renderer to be selected. */
+    if (screen->pScreen != pScreen || !screen->fbconfigs ||
+        screen->numFBConfigs <= 0 || !screen->visuals ||
+        screen->numVisuals <= 0 || screen->numVisuals > screen->numFBConfigs ||
+        !screen->GLextensions || !screen->GLextensions[0] ||
+        !screen->GLXextensions || !screen->GLXextensions[0] ||
+        !pScreen->visuals || pScreen->numVisuals <= 0)
+        FatalError("Xlorie: selected GLX provider initialization is incomplete; startup aborted\n");
+    for (int vi = 0; vi < screen->numVisuals; vi++) {
+        if (!screen->visuals[vi] || !screen->visuals[vi]->visualID)
+            FatalError("Xlorie: selected GLX provider has an invalid visual; startup aborted\n");
+    }
 
     lorieLog("Xlorie: GLX minimal provider active for screen %d: "
              "numVisuals=%d numFBConfigs=%d screenVisuals=%d\n",

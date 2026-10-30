@@ -340,10 +340,15 @@ ddxProcessArgument(int argc, char *argv[], int i)
     }
 
     if (strcmp(argv[i], "-framerate") == 0) {
+        char *end;
+        long framerate;
         CHECK_FOR_REQUIRED_ARGUMENTS(1);
-        lorieScreen.framerate = atoi(argv[i + 1]);
-        if (lorieScreen.framerate <= 0)
-            lorieScreen.framerate = LORIE_DEFAULT_FRAMERATE;
+        errno = 0;
+        framerate = strtol(argv[i + 1], &end, 10);
+        if (errno || end == argv[i + 1] || *end ||
+            framerate <= 0 || framerate > 1000000)
+            FatalError("Xlorie: invalid explicit framerate '%s'\n", argv[i + 1]);
+        lorieScreen.framerate = (int) framerate;
         return 2;
     }
 
@@ -1514,6 +1519,38 @@ lorieRRGetInfo(ScreenPtr pScreen, Rotation *rotations)
     return TRUE;
 }
 
+/* This virtual output has no scanout blanking. Keep totals at the visible
+ * dimensions so dotClock / hTotal / vTotal is exactly the requested Hz.
+ * RandR's dotClock is 32-bit: reject an unrepresentable combination rather
+ * than overflowing it or reporting a different refresh rate. */
+static Bool
+lorieRandRModeInfo(int width, int height, int framerate,
+                   xRRModeInfo *modeInfo, char *name, size_t nameSize)
+{
+    uint64_t dotClock;
+    int length;
+
+    if (width <= 0 || width > UINT16_MAX ||
+        height <= 0 || height > UINT16_MAX ||
+        framerate <= 0 || framerate > 1000000)
+        return FALSE;
+    dotClock = (uint64_t) width * height * framerate;
+    if (dotClock > UINT32_MAX)
+        return FALSE;
+
+    length = snprintf(name, nameSize, "%dx%d@%d", width, height, framerate);
+    if (length < 0 || (size_t) length >= nameSize)
+        return FALSE;
+    memset(modeInfo, 0, sizeof(*modeInfo));
+    modeInfo->width = width;
+    modeInfo->height = height;
+    modeInfo->hSyncStart = modeInfo->hSyncEnd = modeInfo->hTotal = width;
+    modeInfo->vSyncStart = modeInfo->vSyncEnd = modeInfo->vTotal = height;
+    modeInfo->dotClock = (CARD32) dotClock;
+    modeInfo->nameLength = length;
+    return TRUE;
+}
+
 static Bool
 lorieRandRInit(ScreenPtr pScreen)
 {
@@ -1544,11 +1581,12 @@ lorieRandRInit(ScreenPtr pScreen)
 
     RRScreenSetSizeRange(pScreen, 1, 1, 32767, 32767);
 
-    snprintf(name, sizeof(name), "%dx%d", pScreen->width, pScreen->height);
-    memset(&modeInfo, 0, sizeof(modeInfo));
-    modeInfo.width = pScreen->width;
-    modeInfo.height = pScreen->height;
-    modeInfo.nameLength = strlen(name);
+    if (!lorieRandRModeInfo(pScreen->width, pScreen->height,
+                            lorieScreen.framerate, &modeInfo, name, sizeof(name))) {
+        ErrorF("Xlorie: requested RandR mode %dx%d@%d cannot be represented\n",
+               pScreen->width, pScreen->height, lorieScreen.framerate);
+        return FALSE;
+    }
 
     mode = RRModeGet(&modeInfo, name);
     if (!mode)
@@ -1624,18 +1662,14 @@ lorieConfigureNotify(int width, int height, int framerate,
     if (!pScreen || width <= 0 || height <= 0)
         return;
 
-    if (framerate <= 0)
-        framerate = lorieScreen.framerate > 0 ?
-            lorieScreen.framerate : LORIE_DEFAULT_FRAMERATE;
+    if (!lorieRandRModeInfo(width, height, framerate, &modeInfo,
+                            modeName, sizeof(modeName))) {
+        FatalError("Xlorie: requested RandR mode %dx%d@%d cannot be represented\n",
+                   width, height, framerate);
+    }
 
     lorieLog("configure screen %dx%d@%d (current %dx%d)\n", width, height,
              framerate, pScreen->width, pScreen->height);
-
-    snprintf(modeName, sizeof(modeName), "%dx%d", width, height);
-    memset(&modeInfo, 0, sizeof(modeInfo));
-    modeInfo.width = width;
-    modeInfo.height = height;
-    modeInfo.nameLength = strlen(modeName);
 
     mode = RRModeGet(&modeInfo, modeName);
     output = RRFirstOutput(pScreen);
@@ -1657,6 +1691,9 @@ lorieConfigureNotify(int width, int height, int framerate,
 #ifdef PRESENT
     lorieScreen.vblankInterval = 1000000 / framerate;
 #endif
+    /* RRScreenSizeSet may short-circuit for a refresh-only change. The new
+     * CRTC mode still needs to be published to RandR clients. */
+    RRTellChanged(pScreen);
 #else
     (void) width;
     (void) height;
