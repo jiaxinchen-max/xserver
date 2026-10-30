@@ -73,14 +73,14 @@ static enum lorie_gl_mode
 mode_from_string(const char *value)
 {
     if (!value || !*value)
-        return LORIE_GL_FALLBACK;
+        return LORIE_GL_INVALID;
     if (!strcasecmp(value, "system"))
         return LORIE_GL_SYSTEM;
-    if (!strcasecmp(value, "zink") || !strcasecmp(value, "turnip"))
+    if (!strcasecmp(value, "zink"))
         return LORIE_GL_ZINK;
-    if (!strcasecmp(value, "llvmpipe") || !strcasecmp(value, "software"))
+    if (!strcasecmp(value, "llvmpipe"))
         return LORIE_GL_LLVMPIPE;
-    return LORIE_GL_FALLBACK;
+    return LORIE_GL_INVALID;
 }
 
 enum lorie_gl_mode
@@ -93,18 +93,12 @@ lorieEglResolveMode(void)
         value = getenv("KWIN_ANDROID_GL_MODE");
 
     mode = mode_from_string(value);
-    if (mode == LORIE_GL_FALLBACK) {
-        if (value && *value)
-            lorieLog("Xlorie: unrecognized GL mode \"%s\"; run "
-                     "kwin_android_select_rendering first. Using software fb.\n",
-                     value);
-        else
-            lorieLog("Xlorie: no XLORIE_GL_MODE/KWIN_ANDROID_GL_MODE set; "
-                     "defaulting to system GLES.\n");
-        /* Mirror KWin's default: unset -> system. */
-        if (!value || !*value)
-            return LORIE_GL_SYSTEM;
-    }
+    if (mode == LORIE_GL_INVALID)
+        FatalError("Xlorie: explicit GL mode is required (system, zink, llvmpipe); got \"%s\"\n",
+                   value ? value : "<unset>");
+    if (getenv("XLORIE_GL_MODE") && getenv("KWIN_ANDROID_GL_MODE") &&
+        mode_from_string(getenv("KWIN_ANDROID_GL_MODE")) != mode)
+        FatalError("Xlorie: XLORIE_GL_MODE conflicts with KWIN_ANDROID_GL_MODE\n");
     return mode;
 }
 
@@ -115,27 +109,96 @@ has_egl_extension(EGLDisplay dpy, const char *name)
     return exts && epoxy_extension_in_string(exts, name);
 }
 
+/* Select one provider and driver before libepoxy resolves its first symbol.
+ * The requested mode owns this environment; inherited sessions cannot alter it.
+ */
+static Bool
+configure_mode_environment(enum lorie_gl_mode mode)
+{
+    static const char *const clear_mesa[] = {
+        "MESA_LOADER_DRIVER_OVERRIDE", "GALLIUM_DRIVER", "LIBGL_ALWAYS_SOFTWARE",
+        "VK_DRIVER_FILES", "VK_ICD_FILENAMES", "WRAPPER_VULKAN_PATH",
+        "TERMUX_VULKAN_BROKER_SOCKET", "MESA_VK_WSI_DEBUG",
+        "MESA_GL_VERSION_OVERRIDE", "MESA_GLES_VERSION_OVERRIDE",
+        "MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE", "LP_NUM_THREADS",
+    };
+    const char *driver_files = getenv("VK_DRIVER_FILES");
+    const char *icd_files = getenv("VK_ICD_FILENAMES");
+    char *icd = NULL;
+    const char *selected;
+    size_t i;
+
+    if (mode == LORIE_GL_ZINK) {
+        if (driver_files && *driver_files && icd_files && *icd_files &&
+            strcmp(driver_files, icd_files)) {
+            lorieLog("Xlorie EGL: VK_DRIVER_FILES conflicts with VK_ICD_FILENAMES\n");
+            return FALSE;
+        }
+        selected = driver_files && *driver_files ? driver_files :
+                               icd_files && *icd_files ? icd_files :
+#if defined(__aarch64__)
+            "/data/data/com.termux/files/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json";
+#elif defined(__arm__)
+            "/data/data/com.termux/files/usr/share/vulkan/icd.d/freedreno_icd.arm.json";
+#else
+            "";
+#endif
+        if (!*selected || access(selected, R_OK)) {
+            lorieLog("Xlorie EGL: requested Zink ICD is not readable: %s\n", selected);
+            return FALSE;
+        }
+        icd = strdup(selected);
+        if (!icd)
+            return FALSE;
+    }
+    for (i = 0; i < sizeof(clear_mesa) / sizeof(clear_mesa[0]); i++) {
+        if (unsetenv(clear_mesa[i])) {
+            free(icd);
+            return FALSE;
+        }
+    }
+    if (setenv("TERMUX_ANDROID_ZINK", mode == LORIE_GL_SYSTEM ? "0" : "1", 1))
+        goto fail;
+    if (mode == LORIE_GL_ZINK) {
+        if (setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1) ||
+            setenv("GALLIUM_DRIVER", "zink", 1) ||
+            setenv("VK_DRIVER_FILES", icd, 1) ||
+            setenv("VK_ICD_FILENAMES", icd, 1))
+            goto fail;
+        lorieLog("Xlorie EGL: requested Zink ICD=%s\n", icd);
+    } else if (mode == LORIE_GL_LLVMPIPE) {
+        if (setenv("MESA_LOADER_DRIVER_OVERRIDE", "llvmpipe", 1) ||
+            setenv("GALLIUM_DRIVER", "llvmpipe", 1) ||
+            setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1) ||
+            setenv("LP_NUM_THREADS", "4", 1))
+            goto fail;
+    }
+    free(icd);
+    return TRUE;
+
+fail:
+    free(icd);
+    return FALSE;
+}
+
 static EGLDisplay
 get_platform_display(enum lorie_gl_mode mode)
 {
-    const char *client_exts = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+    const char *client_exts;
     EGLDisplay dpy = EGL_NO_DISPLAY;
 
-    if (client_exts &&
-        epoxy_extension_in_string(client_exts, "EGL_EXT_platform_base")) {
-        if (mode == LORIE_GL_SYSTEM &&
-            epoxy_extension_in_string(client_exts, "EGL_KHR_platform_android"))
-            dpy = eglGetPlatformDisplayEXT(EGL_PLATFORM_ANDROID_KHR,
-                                           EGL_DEFAULT_DISPLAY, NULL);
-        else if (mode != LORIE_GL_SYSTEM &&
-                 epoxy_extension_in_string(client_exts,
-                                           "EGL_MESA_platform_surfaceless"))
-            dpy = eglGetPlatformDisplayEXT(EGL_PLATFORM_SURFACELESS_MESA,
-                                           EGL_DEFAULT_DISPLAY, NULL);
-    }
+    /* Android's native EGL display has one canonical entry point. Do not
+     * require the optional EGL_KHR_platform_android extension or try a
+     * different display when this entry point fails. */
+    if (mode == LORIE_GL_SYSTEM)
+        return eglGetDisplay(EGL_DEFAULT_DISPLAY);
 
-    if (dpy == EGL_NO_DISPLAY)
-        dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    client_exts = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+    if (client_exts &&
+        epoxy_extension_in_string(client_exts, "EGL_EXT_platform_base") &&
+        epoxy_extension_in_string(client_exts, "EGL_MESA_platform_surfaceless"))
+        dpy = eglGetPlatformDisplayEXT(EGL_PLATFORM_SURFACELESS_MESA,
+                                      EGL_DEFAULT_DISPLAY, NULL);
 
     return dpy;
 }
@@ -152,14 +215,19 @@ lorieEglInit(enum lorie_gl_mode mode)
     static const EGLint pbuffer_attribs[] = {
         EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE,
     };
-    const EGLint ctx_versions[] = { 3, 2 };
+    const EGLint ctx_attribs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
     EGLint n = 0;
-    unsigned i;
+    const char *renderer;
 
     if (egl.active)
-        return TRUE;
-    if (mode == LORIE_GL_FALLBACK)
+        return egl.mode == mode;
+    if (mode == LORIE_GL_INVALID)
         return FALSE;
+
+    if (!configure_mode_environment(mode)) {
+        lorieLog("Xlorie EGL: failed to configure the requested renderer\n");
+        return FALSE;
+    }
 
     memset(&egl, 0, sizeof(egl));
     egl.mode = mode;
@@ -200,15 +268,8 @@ lorieEglInit(enum lorie_gl_mode mode)
         egl.pbuffer = EGL_NO_SURFACE;
     }
 
-    for (i = 0; i < sizeof(ctx_versions) / sizeof(ctx_versions[0]); i++) {
-        const EGLint ctx_attribs[] = {
-            EGL_CONTEXT_CLIENT_VERSION, ctx_versions[i], EGL_NONE,
-        };
-        egl.context = eglCreateContext(egl.display, egl.config, EGL_NO_CONTEXT,
-                                       ctx_attribs);
-        if (egl.context != EGL_NO_CONTEXT)
-            break;
-    }
+    egl.context = eglCreateContext(egl.display, egl.config, EGL_NO_CONTEXT,
+                                   ctx_attribs);
     if (egl.context == EGL_NO_CONTEXT) {
         lorieLog("Xlorie EGL: eglCreateContext failed (0x%x)\n", eglGetError());
         goto fail;
@@ -236,6 +297,18 @@ lorieEglInit(enum lorie_gl_mode mode)
             eglGetProcAddress("eglGetNativeClientBufferANDROID");
     if (!epoxy_has_gl_extension("GL_OES_EGL_image")) {
         lorieLog("Xlorie EGL: GL_OES_EGL_image missing\n");
+        goto fail;
+    }
+
+    renderer = (const char *) glGetString(GL_RENDERER);
+    if (!renderer ||
+        (mode == LORIE_GL_ZINK &&
+         ((!strstr(renderer, "zink") && !strstr(renderer, "Zink")) ||
+          strstr(renderer, "llvmpipe") || strstr(renderer, "lavapipe") ||
+          strstr(renderer, "software") || strstr(renderer, "Software"))) ||
+        (mode == LORIE_GL_LLVMPIPE && !strstr(renderer, "llvmpipe"))) {
+        lorieLog("Xlorie EGL: renderer \"%s\" does not match requested mode %d\n",
+                 renderer ? renderer : "<null>", mode);
         goto fail;
     }
 
@@ -319,31 +392,10 @@ lorieEglMakeCurrentOwn(void)
 static void
 lorieGlamorMakeCurrent(struct glamor_context *glamor_ctx)
 {
-    static Bool broken = FALSE;
-
     if (!eglMakeCurrent(glamor_ctx->display, glamor_ctx->drawable,
-                        glamor_ctx->drawable, glamor_ctx->ctx)) {
-        /* The vendor (system) EGL display can be invalidated by Android
-         * power/surface transitions (observed EGL_BAD_DISPLAY on screen
-         * sleep/wake on a Mi 11). Do not FatalError: log once and keep the
-         * server alive; the frame flush is suppressed while broken. */
-        if (!broken) {
-            broken = TRUE;
-            lorieLog("Xlorie: glamor eglMakeCurrent failed (0x%x); "
-                     "display=%p ctx=%p surf=%p curdisp=%p\n",
-                     eglGetError(), (void *) glamor_ctx->display,
-                     (void *) glamor_ctx->ctx, glamor_ctx->drawable,
-                     (void *) eglGetCurrentDisplay());
-            lorieLog("  eglQueryString(display)=%s\n",
-                     eglQueryString(glamor_ctx->display, EGL_VERSION));
-            egl_log_backtrace();
-        }
-        return;
-    }
-    if (broken) {
-        broken = FALSE;
-        lorieLog("Xlorie: glamor EGL recovered\n");
-    }
+                        glamor_ctx->drawable, glamor_ctx->ctx))
+        FatalError("Xlorie: selected GL mode failed: eglMakeCurrent (0x%x)\n",
+                   eglGetError());
 }
 
 Bool
@@ -353,8 +405,8 @@ lorieEglMakeCurrentOk(void)
         return FALSE;
 
     if (!eglMakeCurrent(egl.display, egl.pbuffer, egl.pbuffer, egl.context)) {
-        lorieLog("Xlorie: eglMakeCurrent(own) failed (0x%x)\n", eglGetError());
-        return FALSE;
+        FatalError("Xlorie: selected GL mode failed: eglMakeCurrent(own) (0x%x)\n",
+                   eglGetError());
     }
     return TRUE;
 }

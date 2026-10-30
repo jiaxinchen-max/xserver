@@ -1,0 +1,8 @@
+xserver-r6-gles-readback.patch
+xserver-r6-explicit-render-mode.patch
+xserver-r6-disable-glx.patch
+xserver-r6-present-wakeup.patch
+xserver-r6-fail-fast-resources.patch
+xserver-r6-exact-depth-transfer.patch
+xserver-r6-gradient-highp.patch
+xserver-r6-memory-a8-picture.patch

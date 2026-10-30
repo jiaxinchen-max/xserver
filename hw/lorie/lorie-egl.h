@@ -43,17 +43,17 @@ void egl_log_backtrace(void);
 int lorieEglRecvAhardwareBuffer(int socketFd, AHardwareBuffer **outBuffer);
 
 enum lorie_gl_mode {
-    LORIE_GL_FALLBACK = 0,  /* no GPU: keep the software fb path */
+    LORIE_GL_INVALID = 0,   /* missing or invalid explicit mode */
     LORIE_GL_SYSTEM,        /* Android system EGL/GLES, AHB native import */
     LORIE_GL_ZINK,          /* Mesa zink/Turnip, dma-buf import */
     LORIE_GL_LLVMPIPE,      /* Mesa software GL through glamor */
 };
 
-/* Resolve XLORIE_GL_MODE (falling back to KWIN_ANDROID_GL_MODE). */
+/* Resolve the explicitly selected XLORIE_GL_MODE/KWIN_ANDROID_GL_MODE. */
 enum lorie_gl_mode lorieEglResolveMode(void);
 
 /* Bring up the EGL display/context for the given mode. Returns FALSE on any
- * failure (the caller must then fall back to the software fb path). */
+ * failure (the caller must fail startup without changing the selected mode). */
 Bool lorieEglInit(enum lorie_gl_mode mode);
 void lorieEglFini(void);
 
@@ -71,7 +71,7 @@ EGLContext lorieEglContext(void);
 
 /* Bind the Xlorie EGL context (pbuffer for system, EGL_NO_SURFACE for zink).
  * Returns FALSE (and logs) when the context cannot be bound -- the GPU path is
- * then paused until it recovers. */
+ * terminated rather than continuing with an invalid GL context. */
 Bool lorieEglMakeCurrentOk(void);
 void lorieEglMakeCurrentOwn(void);
 

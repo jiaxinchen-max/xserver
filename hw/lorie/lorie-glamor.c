@@ -66,6 +66,7 @@ lorieGlamorImportTexture(LorieBuffer *buffer, EGLImageKHR *outImage)
     const LorieBuffer_Desc *desc;
     EGLImageKHR image = EGL_NO_IMAGE_KHR;
     GLuint texture;
+    const char *receive = getenv("TERMUX_RENDER_AHB_RECEIVE");
 
     if (outImage)
         *outImage = EGL_NO_IMAGE_KHR;
@@ -74,27 +75,27 @@ lorieGlamorImportTexture(LorieBuffer *buffer, EGLImageKHR *outImage)
 
     desc = LorieBuffer_description(buffer);
 
-    /* Handle-aware dispatch: the termux-render client library hands us either
-     * a native AHB (TERMUX_RENDER_AHB_RECEIVE=native → desc->buffer set) or a
-     * dma-buf fd (default receive mode → desc->buffer is NULL, fd populated).
-     * Prefer the native handle when present, fall back to the dma-buf fd. */
-    if (desc->type == LORIEBUFFER_AHARDWAREBUFFER && desc->buffer)
+    /* The receiver parameter selects one import ABI. An import failure must
+     * not silently switch the selected buffer transport. */
+    if (receive && !strcmp(receive, "native")) {
+        if (desc->type != LORIEBUFFER_AHARDWAREBUFFER || !desc->buffer) {
+            lorieLog("Xlorie glamor: native receive mode requires an AHB handle\n");
+            return 0;
+        }
         image = lorieEglImageFromAHB(desc->buffer);
-
-    lorieLog("Xlorie glamor: import: native=%d\n", image != EGL_NO_IMAGE_KHR);
-    if (image == EGL_NO_IMAGE_KHR) {
+    } else if (receive && !strcmp(receive, "dmabuf")) {
         int fd = LorieBuffer_dupDmaBufFd(buffer);
-
         if (fd < 0) {
-            lorieLog("Xlorie glamor: no native AHB handle and no dma-buf fd "
-                     "(TERMUX_RENDER_AHB_RECEIVE=%s)\n",
-                     getenv("TERMUX_RENDER_AHB_RECEIVE") ?: "dmabuf(default)");
+            lorieLog("Xlorie glamor: dmabuf receive mode requires a dma-buf fd\n");
             return 0;
         }
         image = lorieEglImageFromDmaBuf(fd, desc->width, desc->height,
                                         desc->stride * 4,
                                         drm_fourcc_for_ahb(desc->format));
         close(fd);   /* EGL dups internally */
+    } else {
+        lorieLog("Xlorie glamor: explicit TERMUX_RENDER_AHB_RECEIVE=native|dmabuf required\n");
+        return 0;
     }
 
     if (image == EGL_NO_IMAGE_KHR) {
@@ -143,6 +144,7 @@ lorieGlamorBackScreenPixmap(ScreenPtr screen, LorieBuffer *root,
     PixmapPtr pixmap;
     EGLImageKHR image = EGL_NO_IMAGE_KHR;
     GLuint texture;
+    const char *receive = getenv("TERMUX_RENDER_AHB_RECEIVE");
 
     if (outImage)
         *outImage = EGL_NO_IMAGE_KHR;

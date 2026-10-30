@@ -23,6 +23,42 @@
 #include "glamor_priv.h"
 #include "glamor_transfer.h"
 
+/* GLES has no X1555 upload type: GL_UNSIGNED_SHORT_5_5_5_1 puts every
+ * channel at a different bit position. Convert pixel storage, never rendering. */
+static void
+glamor_upload_pixels(const struct glamor_format *f, int x, int y,
+                     int width, int height, const uint8_t *bits, uint32_t stride)
+{
+    uint8_t *rgba;
+    GLint row_length;
+    int row, col;
+
+    if (!f->rgba_upload) {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, width, height,
+                       f->format, f->type, bits);
+        return;
+    }
+    rgba = malloc((size_t) width * 4);
+    if (!rgba)
+        FatalError("Xlorie: cannot allocate X1555 transfer row\n");
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row_length);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    for (row = 0; row < height; row++) {
+        const uint8_t *src = bits + (size_t) row * stride;
+        for (col = 0; col < width; col++) {
+            unsigned pixel = src[col * 2] | ((unsigned) src[col * 2 + 1] << 8);
+            rgba[col * 4] = (((pixel >> 10) & 31) * 255 + 15) / 31;
+            rgba[col * 4 + 1] = (((pixel >> 5) & 31) * 255 + 15) / 31;
+            rgba[col * 4 + 2] = ((pixel & 31) * 255 + 15) / 31;
+            rgba[col * 4 + 3] = 255;
+        }
+        glTexSubImage2D(GL_TEXTURE_2D, 0, x, y + row, width, 1,
+                       GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    }
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
+    free(rgba);
+}
+
 /*
  * Write a region of bits into a pixmap
  */
@@ -72,18 +108,12 @@ glamor_upload_boxes(PixmapPtr pixmap, BoxPtr in_boxes, int in_nbox,
 
             if (glamor_priv->has_unpack_subimage ||
                 x2 - x1 == byte_stride / bytes_per_pixel) {
-                glTexSubImage2D(GL_TEXTURE_2D, 0,
-                                x1 - box->x1, y1 - box->y1,
-                                x2 - x1, y2 - y1,
-                                f->format, f->type,
-                                bits + ofs);
+                glamor_upload_pixels(f, x1 - box->x1, y1 - box->y1,
+                                     x2 - x1, y2 - y1, bits + ofs, byte_stride);
             } else {
                 for (; y1 < y2; y1++, ofs += byte_stride)
-                    glTexSubImage2D(GL_TEXTURE_2D, 0,
-                                    x1 - box->x1, y1 - box->y1,
-                                    x2 - x1, 1,
-                                    f->format, f->type,
-                                    bits + ofs);
+                    glamor_upload_pixels(f, x1 - box->x1, y1 - box->y1,
+                                         x2 - x1, 1, bits + ofs, byte_stride);
             }
         }
     }
@@ -121,6 +151,59 @@ glamor_upload_pixmap(PixmapPtr pixmap)
     box.y2 = pixmap->drawable.height;
     glamor_upload_boxes(pixmap, &box, 1, 0, 0, 0, 0,
                         pixmap->devPrivate.ptr, pixmap->devKind);
+}
+
+/* GLES implementations may support BGRA uploads but only RGBA readback.
+ * Convert only the requested rectangle: neighbouring pixels and row padding
+ * can belong to other download boxes and must remain untouched.
+ */
+static void
+glamor_read_pixels(const struct glamor_format *f, int x, int y, int width,
+                   int height, uint8_t *bits, uint32_t stride)
+{
+    if (f->rgba_readback && (f->depth == 8 || f->depth == 15 || f->depth == 16)) {
+        uint8_t *rgba = malloc((size_t) width * 4);
+        GLint row_length;
+        int row, col;
+
+        if (!rgba)
+            FatalError("Xlorie: cannot allocate exact RGBA transfer row\n");
+        glGetIntegerv(GL_PACK_ROW_LENGTH, &row_length);
+        glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+        for (row = 0; row < height; row++) {
+            uint8_t *dst = bits + (size_t) row * stride;
+            glReadPixels(x, y + row, width, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+            for (col = 0; col < width; col++) {
+                const uint8_t *pixel = rgba + col * 4;
+                if (f->depth == 8) {
+                    dst[col] = pixel[0];
+                } else {
+                    unsigned red = (pixel[0] * 31 + 127) / 255;
+                    unsigned blue = (pixel[2] * 31 + 127) / 255;
+                    unsigned green = (pixel[1] * (f->depth == 16 ? 63 : 31) + 127) / 255;
+                    unsigned value = f->depth == 16 ? (red << 11) | (green << 5) | blue
+                                                    : (red << 10) | (green << 5) | blue;
+                    dst[col * 2] = value & 255;
+                    dst[col * 2 + 1] = value >> 8;
+                }
+            }
+        }
+        glPixelStorei(GL_PACK_ROW_LENGTH, row_length);
+        free(rgba);
+        return;
+    }
+    glReadPixels(x, y, width, height,
+                 f->rgba_readback ? GL_RGBA : f->format, f->type, bits);
+    if (f->rgba_readback) {
+        for (int row = 0; row < height; row++) {
+            uint8_t *pixel = bits + (size_t) row * stride;
+            for (int col = 0; col < width; col++, pixel += 4) {
+                uint8_t red = pixel[0];
+                pixel[0] = pixel[2];
+                pixel[2] = red;
+            }
+        }
+    }
 }
 
 /*
@@ -172,10 +255,10 @@ glamor_download_boxes(PixmapPtr pixmap, BoxPtr in_boxes, int in_nbox,
 
             if (glamor_priv->has_pack_subimage ||
                 x2 - x1 == byte_stride / bytes_per_pixel) {
-                glReadPixels(x1 - box->x1, y1 - box->y1, x2 - x1, y2 - y1, f->format, f->type, bits + ofs);
+                glamor_read_pixels(f, x1 - box->x1, y1 - box->y1, x2 - x1, y2 - y1, bits + ofs, byte_stride);
             } else {
                 for (; y1 < y2; y1++, ofs += byte_stride)
-                    glReadPixels(x1 - box->x1, y1 - box->y1, x2 - x1, 1, f->format, f->type, bits + ofs);
+                    glamor_read_pixels(f, x1 - box->x1, y1 - box->y1, x2 - x1, 1, bits + ofs, byte_stride);
             }
         }
     }

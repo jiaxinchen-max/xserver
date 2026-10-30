@@ -211,6 +211,12 @@ glamor_create_pixmap(ScreenPtr screen, int w, int h, int depth,
     if (w > 32767 || h > 32767)
         return NullPixmap;
 
+    if (w > 0 && h > 0 && glamor_priv->formats[depth].gpu_unsupported) {
+        ErrorF("Xlorie: rejecting depth-%d pixmap %dx%d: selected GL backend "
+               "has no exact pixel transfer; BadAlloc\n", depth, w, h);
+        return NullPixmap;
+    }
+
     if ((usage == GLAMOR_CREATE_PIXMAP_CPU
          || (usage == CREATE_PIXMAP_USAGE_GLYPH_PICTURE &&
              w <= glamor_priv->glyph_max_dim &&
@@ -249,6 +255,11 @@ glamor_create_pixmap(ScreenPtr screen, int w, int h, int depth,
 
     if (fbo == NULL) {
         fbDestroyPixmap(pixmap);
+        if (getenv("XLORIE_GLAMOR")) {
+            ErrorF("Xlorie: GPU FBO allocation failed for depth %d pixmap %dx%d; BadAlloc\n",
+                   depth, w, h);
+            return NullPixmap;
+        }
         return fbCreatePixmap(screen, w, h, depth, usage);
     }
 
@@ -467,6 +478,10 @@ glamor_add_format(ScreenPtr screen, int depth, CARD32 render_format,
     glamor_screen_private *glamor_priv = glamor_get_screen_private(screen);
     struct glamor_format *f = &glamor_priv->formats[depth];
 
+    f->rgba_readback = FALSE;
+    f->rgba_upload = FALSE;
+    f->gpu_unsupported = FALSE;
+
     /* If we're trying to run on GLES, make sure that we get the read
      * formats that we're expecting, since glamor_transfer relies on
      * them matching to get data back out.  To avoid this limitation, we
@@ -495,8 +510,13 @@ glamor_add_format(ScreenPtr screen, int depth, CARD32 render_format,
                                GL_TEXTURE_2D, tex, 0);
         status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (status != GL_FRAMEBUFFER_COMPLETE) {
-            ErrorF("glamor: Test fbo for depth %d incomplete.  "
-                   "Falling back to software.\n", depth);
+            if (getenv("XLORIE_GLAMOR")) {
+                f->gpu_unsupported = TRUE;
+                ErrorF("Xlorie: depth %d GPU FBO is incomplete; pixmap requests will fail\n", depth);
+            } else {
+                ErrorF("glamor: Test fbo for depth %d incomplete.  "
+                       "Falling back to software.\n", depth);
+            }
             glDeleteTextures(1, &tex);
             glDeleteFramebuffers(1, &fbo);
             return;
@@ -509,12 +529,23 @@ glamor_add_format(ScreenPtr screen, int depth, CARD32 render_format,
         glDeleteFramebuffers(1, &fbo);
 
         if (format != read_format || type != read_type) {
-            /* Turnip/Android GLES report a non-matching read format/type for
-             * depth 24/32 BGRA; tolerate it under Xlorie instead of dropping to
-             * software rendering. */
-            if (getenv("XLORIE_GLAMOR") && (depth == 24 || depth == 32)) {
-                ErrorF("glamor: tolerating read format/type 0x%x/0x%x for "
-                       "depth %d under Xlorie.\n", read_format, read_type, depth);
+            /* RGBA/UNSIGNED_BYTE is guaranteed for GLES normalized color
+             * buffers. Convert to the X pixel layout without losing bits. */
+            if (getenv("XLORIE_GLAMOR") &&
+                ((depth == 8 && format == GL_RED && type == GL_UNSIGNED_BYTE) ||
+                 (depth == 15 && format == GL_RGBA && type == GL_UNSIGNED_BYTE) ||
+                 (depth == 16 && format == GL_RGB && type == GL_UNSIGNED_SHORT_5_6_5) ||
+                 ((depth == 24 || depth == 32) && format == GL_BGRA && type == GL_UNSIGNED_BYTE))) {
+                f->rgba_readback = TRUE;
+                ErrorF("glamor: using lossless RGBA readback conversion for depth %d.\n", depth);
+            } else if (getenv("XLORIE_GLAMOR")) {
+                /* In particular RGBA8 cannot preserve RGB10_A2 precision. */
+                f->gpu_unsupported = TRUE;
+                ErrorF("Xlorie: depth %d exact readback unsupported "
+                       "(implementation 0x%x/0x%x, required 0x%x/0x%x); "
+                       "pixmap requests will fail with BadAlloc\n",
+                       depth, read_format, read_type, format, type);
+                return;
             } else {
                 ErrorF("glamor: Implementation returned 0x%x/0x%x read format/type "
                        "for depth %d, expected 0x%x/0x%x.  "
@@ -523,6 +554,13 @@ glamor_add_format(ScreenPtr screen, int depth, CARD32 render_format,
                 return;
             }
         }
+    }
+
+    if (glamor_priv->is_gles && getenv("XLORIE_GLAMOR") && depth == 15) {
+        /* GL 5551's layout is not X1555. Store the real RGB channels and
+         * explicitly convert the protocol's packed pixels in both directions. */
+        f->rgba_upload = TRUE;
+        f->rgba_readback = TRUE;
     }
 
     f->depth = depth;
@@ -578,7 +616,7 @@ glamor_setup_formats(ScreenPtr screen)
      * a zero internalformat yields an invalid texture that samples as opaque
      * (solid glyph boxes).  Keep A8 textures usable for sampling with the
      * classic GL_ALPHA layout; they stay CPU-rendered (not renderable in ES). */
-    if (glamor_priv->is_gles) {
+    if (glamor_priv->is_gles && !getenv("XLORIE_GLAMOR")) {
         if (glamor_priv->formats[8].depth != 8)
             glamor_add_format(screen, 8, PICT_a8,
                               GL_ALPHA, GL_ALPHA, GL_UNSIGNED_BYTE, FALSE);
@@ -598,7 +636,9 @@ glamor_setup_formats(ScreenPtr screen)
          * disable render accel for now.
          */
         glamor_add_format(screen, 15, PICT_x1r5g5b5,
-                          GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, TRUE);
+                          GL_RGB5_A1, GL_RGBA,
+                          getenv("XLORIE_GLAMOR") ? GL_UNSIGNED_BYTE : GL_UNSIGNED_SHORT_5_5_5_1,
+                          TRUE);
     } else {
         glamor_add_format(screen, 15, PICT_x1r5g5b5,
                           GL_RGBA, GL_BGRA, GL_UNSIGNED_SHORT_1_5_5_5_REV, TRUE);

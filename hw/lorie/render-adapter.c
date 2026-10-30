@@ -119,8 +119,9 @@ lorieRenderConnect(int width, int height, int framerate)
 
     if (requestedSocketPath && strcmp(requestedSocketPath,
                                       TERMUX_RENDER_SOCKET_PATH) != 0) {
-        lorieLog("libtermux-render uses %s; ignoring requested socket %s\n",
-                 TERMUX_RENDER_SOCKET_PATH, requestedSocketPath);
+        lorieLog("Xlorie: requested render socket %s differs from the supported socket %s; startup aborted\n",
+                 requestedSocketPath, TERMUX_RENDER_SOCKET_PATH);
+        return false;
     }
 
     setScreenConfig(width, height, framerate, renderBufferFormat,
@@ -172,9 +173,13 @@ lorieRenderSignalFrame(void)
 
     if (!activeRootBufferId)
         activeRootBufferId = LorieBuffer_description(buffer)->id;
+    /* The renderer clears these flags under the same shared lock. Publish
+     * after its current draw finishes so it cannot overwrite a newer frame. */
+    lorie_mutex_lock(&state->lock, &state->lockingPid);
     state->rootWindowTextureID = activeRootBufferId;
     state->waitForNextFrame = 0;
     state->drawRequested = 1;
+    lorie_mutex_unlock(&state->lock, &state->lockingPid);
     if (rendererCond)
         pthread_cond_signal(rendererCond);
     return true;

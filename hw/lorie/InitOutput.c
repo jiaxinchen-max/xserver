@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -32,6 +33,7 @@
 #include "drm_fourcc.h"
 #endif
 #include "fb.h"
+#include "extinit.h"
 #include "gcstruct.h"
 #include "glx_extinit.h"
 #include "input.h"
@@ -149,18 +151,18 @@ static Bool blockHandlersRegistered = FALSE;
 static Bool Dri3 = TRUE;
 #endif
 #ifdef LORIE_HAVE_GLAMOR
-static Bool Glamor = TRUE;
 /* A client present flipped the displayed buffer away from the server's root buffer. */
 static Bool presentFlipped = FALSE;
 static Bool glamorActive = FALSE;
 static Bool lorieFbIsScratch = FALSE;
-static enum lorie_gl_mode lorieGlMode = LORIE_GL_FALLBACK;
+static enum lorie_gl_mode lorieGlMode = LORIE_GL_INVALID;
 static EGLImageKHR lorieRootImage = EGL_NO_IMAGE_KHR;
 static GLuint lorieRootTexture = 0;
 #endif
 
 #ifdef PRESENT
 static void loriePerformVblanks(void);
+static void loriePresentArmTimeout(void *timeout);
 #endif
 static void lorieReleaseOwnedRootBuffer(void);
 static Bool lorieCreateRootDamage(ScreenPtr pScreen);
@@ -299,8 +301,7 @@ ddxUseMsg(void)
 {
     ErrorF("-screen 0 WxHx24       set Xlorie screen size\n");
     ErrorF("-framerate n          set requested renderer framerate\n");
-    ErrorF("-render-socket path   accepted for compatibility; "
-           "libtermux-render uses its default socket\n");
+    ErrorF("-render-socket path   must match the libtermux-render socket\n");
     ErrorF("-pixdepths list       support additional pixmap depths\n");
     ErrorF("+/-render             turn on/off RENDER extension support"
            " (default on)\n");
@@ -414,6 +415,7 @@ lorieBlockHandler(void *blockData, void *timeout)
     lorieInputRefresh();
 #ifdef PRESENT
     loriePerformVblanks();
+    loriePresentArmTimeout(timeout);
 #endif
     if (lorieRootDamaged()) {
         /* A one-shot fullscreen present (e.g. a compositor's DRI3 flip) must not keep the
@@ -676,6 +678,42 @@ loriePerformVblanks(void)
             free(vblank);
         }
     }
+}
+
+/* The Present client may be waiting for this MSC before drawing anything
+ * else. Its queue must wake the server even when no input or X request arrives. */
+static int
+loriePresentDelayMillis(uint64_t targetMsc, uint64_t now, uint64_t interval)
+{
+    uint64_t currentMsc, ticks, remaining;
+
+    if (!interval)
+        interval = 1000000 / LORIE_DEFAULT_FRAMERATE;
+    currentMsc = now / interval;
+    if (targetMsc <= currentMsc)
+        return 0;
+    ticks = targetMsc - currentMsc;
+    if (ticks > ((uint64_t) INT_MAX * 1000) / interval)
+        return INT_MAX;
+    remaining = ticks * interval - now % interval;
+    return (int) ((remaining + 999) / 1000);
+}
+
+static void
+loriePresentArmTimeout(void *timeout)
+{
+    lorieVblankRec *vblank;
+    uint64_t earliest = UINT64_MAX;
+    Bool pending = FALSE;
+
+    xorg_list_for_each_entry(vblank, &lorieScreen.vblankQueue, link) {
+        if (!pending || vblank->msc < earliest)
+            earliest = vblank->msc;
+        pending = TRUE;
+    }
+    if (pending)
+        AdjustWaitForDelay(timeout, loriePresentDelayMillis(earliest,
+                           GetTimeInMicros(), lorieScreen.vblankInterval));
 }
 
 static Bool
@@ -1412,12 +1450,13 @@ lorieReplaceRootBuffer(ScreenPtr pScreen, CARD16 width, CARD16 height,
     pScreen->mmHeight = mmHeight;
 
     if (!lorieCreateRootDamage(pScreen))
-        lorieLog("Failed to recreate root damage tracking\n");
+        FatalError("Xlorie: failed to recreate root damage tracking after resize\n");
 
     if (pScreen->root)
         pScreen->ResizeWindow(pScreen->root, 0, 0, width, height, NULL);
 
-    (void) lorieRenderUseBuffer(newBuffer);
+    if (!lorieRenderUseBuffer(newBuffer))
+        FatalError("Xlorie: failed to select the resized root buffer\n");
 
 #ifdef LORIE_HAVE_GLAMOR
     if (glamorActive) {
@@ -1428,7 +1467,8 @@ lorieReplaceRootBuffer(ScreenPtr pScreen, CARD16 width, CARD16 height,
         lorieRootTexture = 0;
         if (!lorieGlamorBackScreenPixmap(pScreen, newBuffer, &lorieRootImage,
                                          &lorieRootTexture))
-            lorieLog("Xlorie: failed to GPU-back root buffer after resize\n");
+            FatalError("Xlorie: selected GL mode %d failed to GPU-back root buffer after resize\n",
+                       lorieGlMode);
         else if (pixmap)
             glamor_clear_pixmap(pixmap);   /* zero-fill on the GPU */
     }
@@ -1547,14 +1587,19 @@ lorieCreateScreenResources(ScreenPtr pScreen)
     if (!ret)
         return FALSE;
 
-    if (!lorieCreateRootDamage(pScreen))
-        lorieLog("Failed to initialize root damage tracking\n");
+    if (!lorieCreateRootDamage(pScreen)) {
+        ErrorF("Xlorie: failed to initialize root damage tracking; startup aborted\n");
+        return FALSE;
+    }
 
 #ifdef LORIE_HAVE_GLAMOR
     if (glamorActive &&
         !lorieGlamorBackScreenPixmap(pScreen, lorieScreen.rootBuffer,
-                                     &lorieRootImage, &lorieRootTexture))
-        lorieLog("Xlorie: failed to GPU-back the root buffer\n");
+                                     &lorieRootImage, &lorieRootTexture)) {
+        ErrorF("Xlorie: selected GL mode %d failed to GPU-back root buffer; startup aborted\n",
+               lorieGlMode);
+        return FALSE;
+    }
 #endif
 
     return TRUE;
@@ -1652,14 +1697,17 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
 #ifdef LORIE_HAVE_GLAMOR
     /* Decide GPU vs software rendering BEFORE connecting: the root buffer's format (colour
      * channel order) is fixed when the app allocates it, see lorieRenderSetGpuRendering(). */
-    lorieGlMode = Glamor ? lorieEglResolveMode() : LORIE_GL_FALLBACK;
-    glamorActive = (lorieGlMode != LORIE_GL_FALLBACK) &&
-                   lorieEglInit(lorieGlMode);
-    if (!glamorActive && lorieGlMode != LORIE_GL_FALLBACK)
-        lorieLog("Xlorie: EGL init failed; using software fb path\n");
+    lorieGlMode = lorieEglResolveMode();
+    if (!lorieEglInit(lorieGlMode)) {
+        ErrorF("Xlorie: selected GL mode %d failed EGL initialization; startup aborted\n",
+               lorieGlMode);
+        return FALSE;
+    }
+    glamorActive = TRUE;
     lorieRenderSetGpuRendering(glamorActive);
 #else
-    lorieRenderSetGpuRendering(FALSE);
+    ErrorF("Xlorie: this build lacks the requested GL rendering backend\n");
+    return FALSE;
 #endif
 
     if (!lorieRenderConnect(lorieScreen.width, lorieScreen.height,
@@ -1733,9 +1781,9 @@ lorieScreenInit(ScreenPtr pScreen, int argc, char **argv)
 #ifdef LORIE_HAVE_GLAMOR
     if (glamorActive) {
         if (!glamor_init(pScreen, GLAMOR_USE_EGL_SCREEN)) {
-            lorieLog("Xlorie: glamor_init failed; using software fb path\n");
-            glamorActive = FALSE;
-            lorieEglFini();
+            ErrorF("Xlorie: selected GL mode %d failed glamor initialization; startup aborted\n",
+                   lorieGlMode);
+            return FALSE;
         } else {
             lorieLog("Xlorie: glamor GPU path enabled\n");
         }
@@ -1784,6 +1832,17 @@ InitOutput(ScreenInfo *screenInfo, int argc, char **argv)
 {
     int i;
     int numFormats = 0;
+    const char *glxEnv = getenv("XLORIE_GLX");
+
+    if (glxEnv) {
+        if (!strcmp(glxEnv, "0"))
+            noGlxExtension = TRUE;
+        else if (!strcmp(glxEnv, "1"))
+            noGlxExtension = FALSE;
+        else
+            FatalError("Xlorie: XLORIE_GLX must be explicitly 0 or 1; got \"%s\"\n",
+                       glxEnv);
+    }
 
     loriePixmapDepths[lorieScreen.depth] = TRUE;
 
@@ -1796,10 +1855,15 @@ InitOutput(ScreenInfo *screenInfo, int argc, char **argv)
         loriePixmapDepths[32] = TRUE;
     }
 
+    if (!noGlxExtension) {
 #ifdef LORIE_HAVE_GLAMOR
-    GlxPushProvider(&lorieGlxProvider);
+        GlxPushProvider(&lorieGlxProvider);
 #endif
-    xorgGlxCreateVendor();
+        xorgGlxCreateVendor();
+        lorieLog("Xlorie: GLX extension enabled\n");
+    } else {
+        lorieLog("Xlorie: GLX extension disabled; no vendor registered\n");
+    }
     lorieInitClipboard();
 
     for (i = 1; i <= 32; i++) {

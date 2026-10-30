@@ -175,6 +175,12 @@ struct glamor_format {
      * just before upload)
      */
     Bool rendering_supported;
+    /** Convert GLES RGBA readback to the X11 pixel representation. */
+    Bool rgba_readback;
+    /** X1555 pixels need explicit RGBA upload conversion on GLES. */
+    Bool rgba_upload;
+    /** The selected GL implementation cannot represent this depth exactly. */
+    Bool gpu_unsupported;
 };
 
 struct glamor_saved_procs {
