@@ -336,7 +336,6 @@ lorieGlxScreenProbe(ScreenPtr pScreen)
             "GLX_EXT_framebuffer_sRGB",
             "GLX_SGI_swap_control",
             "GLX_MESA_copy_sub_buffer",
-            "GLX_INTEL_swap_event",
             "GLX_ARB_fbconfig_float",
             "GLX_ARB_multisample",
             "GLX_EXT_import_context",
